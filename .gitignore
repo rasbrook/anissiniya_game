@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+src\pages\aviator.jsx
+src\components\Aviator.jsx
+src\components\aviator.css
