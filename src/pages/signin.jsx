@@ -25,10 +25,10 @@ const SignInPage = () => {
             setUser(host[0].id)
             navigate('/home')
         } else {
-            console.log('Invalid credentials')
+            // invalid credentials - no string console log
         }
-        console.log(host)
-        console.log(error)
+        //console.log(host)
+        //console.log(error)
     }
 
     return (

@@ -29,7 +29,7 @@ function App() {
           name='abissinia bet'
           logo={logo}
           CompanyColor={maincolor}
-          pages={['Bingo', 'Keno']} />
+          pages={['Bingo', 'Keno', 'Profile']} />
       )}
       <Routes>
         {!isAuthenticated ? (
@@ -41,6 +41,8 @@ function App() {
           <>
             <Route path="/" element={<Navigate to="/home" />} />
             <Route path="/home" element={<Home />} />
+            <Route path="/profile" element={<Home />} />
+
             <Route path="/bingo" element={<Bingo />} />
             <Route path="/Keno" element={<Keno />} />
             {/* <Route path="/Aviator" element={<Aviator />} />

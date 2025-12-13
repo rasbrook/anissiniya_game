@@ -270,7 +270,6 @@ export default function KenoDisplay({ maxPicks = 10, drawCount = 20 }) {
                 }
                 // log expected multiplier (should be close to 1 - targetHouseEdgePercent/100)
                 // using console (developer) so you can inspect in browser devtools
-                console.log(`Spot ${s}-spot expected multiplier: ${expected.toFixed(6)} (target ${(1 - targetHouseEdgePercent / 100).toFixed(6)})`);
             }
         } catch (e) { /* ignore */ }
     }, []);

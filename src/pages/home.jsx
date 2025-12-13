@@ -35,7 +35,7 @@ const Home = (props) => {
     }
 
     return (
-        <div style={{ padding: '20px', maxWidth: '600px', margin: '0 auto' }}>
+        <div style={{ padding: '20px', maxWidth: '600px', margin: '0 auto', marginTop: '100px' }}>
             <h1 style={{ textAlign: 'center', marginBottom: '30px' }}>Profile</h1>
             <div style={{
                 backgroundColor: 'var(--surface)',

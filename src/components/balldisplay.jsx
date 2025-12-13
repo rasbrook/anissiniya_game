@@ -27,7 +27,7 @@ const ballColors = {
 };
 
 const player = Array.from({ length: 150 }, (_, i) => String(i + 1));
-console.log(player)
+////console.log(player)
 
 const Balldisplay = (props) => {
 
@@ -85,8 +85,8 @@ const Balldisplay = (props) => {
     };
 
 
-    console.log(amount)
-    console.log(gameStarted)
+    // //console.log(amount)
+    ////console.log(gameStarted)
 
     // NEW: refs to avoid double-pick race conditions
     const remainingRef = useRef([...bingoBalls]);
@@ -145,20 +145,16 @@ const Balldisplay = (props) => {
     }
 
     const deductAmount = async () => {
-        console.log(`this is the user id ${userId}`)
         const tobededucted = selectedPlayers.length * amount * 0.10
         const newBalance = userData.balance - tobededucted;
-        console.log('this is the new balace' + newBalance)
         const { data, error } = await SupabaseHost
             .from('host')
             .update({ balance: newBalance })
             .eq('id', userId);
-        console.log(newBalance)
-        console.log(data)
+        //console.log(newBalance)
+        //console.log(data)
         if (error) {
             console.error("Error updating balance:", error);
-        } else {
-            console.log("Balance updated successfully");
         }
     }
     // NEW: start a fresh picking run (reset state + start interval)
@@ -205,15 +201,15 @@ const Balldisplay = (props) => {
 
 
     const [selectedPlayers, setSelectedPlayers] = useState([]);
-    console.log(selectedPlayers)
+    //console.log(selectedPlayers)
 
     const handlePlayerClick = (num) => {
         setSelectedPlayers(prev =>
             prev.includes(num) ? prev : [...prev, num]
         );
     };
-    console.log(selectedPlayers.length * amount)
-    console.log(selectedPlayers)
+    //console.log(selectedPlayers.length * amount)
+    //console.log(selectedPlayers)
     // Modal state
     const [showModal, setShowModal] = useState(false);
     const [modalInput, setModalInput] = useState("");
@@ -243,7 +239,7 @@ const Balldisplay = (props) => {
         });
         return groups;
     };
-    console.log(bingoBalls.filter((_, i) => i !== remainingBalls))
+    //console.log(bingoBalls.filter((_, i) => i !== remainingBalls))
 
 
     // Helper: evaluate whether card meets winType given picked numbers set
@@ -355,7 +351,7 @@ const Balldisplay = (props) => {
     // animate the large picked-ball element when a new ball appears
     useEffect(() => {
         const fetchUserData = async () => {
-            console.log(userId)
+            //console.log(userId)
             if (userId) {
                 const { data, error } = await SupabaseHost
                     .from('host')
@@ -363,7 +359,7 @@ const Balldisplay = (props) => {
                     .eq('id', userId)
                     .single();
                 if (data) {
-                    console.log(data)
+                    //console.log(data)
                     setUserData(data);
                 } else {
                     console.error('Error fetching user data:', error);
