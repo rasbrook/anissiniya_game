@@ -1,0 +1,2082 @@
+// Generates bingo cards and returns a mapping { "1": card, "2": card, ... }
+
+const sampleNumbers = (min, max, count) => {
+    // create pool
+    const pool = [];
+    for (let n = min; n <= max; n++) pool.push(n);
+    // shuffle (Fisher-Yates)
+    for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    return pool.slice(0, count);
+};
+
+export const generateBingoCard = () => {
+    // columns ranges
+    const B = sampleNumbers(1, 15, 5);
+    const I = sampleNumbers(16, 30, 5);
+    const N = sampleNumbers(31, 45, 4); // center will be FREE
+    const G = sampleNumbers(46, 60, 5);
+    const O = sampleNumbers(61, 75, 5);
+
+    // build rows (5 rows x 5 columns)
+    const rows = Array.from({ length: 5 }, (_, r) => {
+        return [
+            String(B[r]).padStart(2, '0'),
+            String(I[r]).padStart(2, '0'),
+            '', // N column value or FREE
+            String(G[r]).padStart(2, '0'),
+            String(O[r]).padStart(2, '0')
+        ];
+    });
+
+    // insert N column values; middle is FREE
+    let nIdx = 0;
+    for (let r = 0; r < 5; r++) {
+        if (r === 2) rows[r][2] = 'FREE';
+        else {
+            rows[r][2] = String(N[nIdx]).padStart(2, '0');
+            nIdx++;
+        }
+    }
+    return rows;
+};
+
+/**
+ * generateAllCards(total = 150)
+ * returns an object: { "1": card, "2": card, ... }
+ * card is a 5x5 array of strings, with center 'FREE'
+ */
+export const generateAllCards = (total = 150) => {
+    const cards = {};
+    for (let i = 1; i <= total; i++) {
+        cards[String(i)] = generateBingoCard();
+    }
+    return cards;
+};
+
+export default generateAllCards;
+
+
+
+House edge
+
+Tail boost
+
+
+
+import React, { useState, useEffect, useRef } from "react";
+import { motion } from "framer-motion";
+
+const range = (n) => Array.from({ length: n }, (_, i) => i + 1);
+
+const randomSample = (n, k) => {
+    const out = new Set();
+    while (out.size < k) out.add(Math.floor(Math.random() * n) + 1);
+    return Array.from(out);
+};
+
+// combination as floating number computed multiplicatively to avoid huge
+// intermediate factorials: C(n,k) = product_{i=1..k} (n-k+i)/i
+const comb = (n, k) => {
+    if (k < 0 || k > n) return 0;
+    k = Math.min(k, n - k);
+    let res = 1;
+    for (let i = 1; i <= k; i++) {
+        res *= (n - k + i) / i;
+    }
+    return res;
+};
+
+// exact combination using BigInt
+const combBig = (n, k) => {
+    if (k < 0 || k > n) return 0n;
+    k = Math.min(k, n - k);
+    let res = 1n;
+    for (let i = 1; i <= k; i++) {
+        res = res * BigInt(n - k + i) / BigInt(i);
+    }
+    return res;
+};
+
+// divide two BigInts and return decimal string with `decimals` fractional digits
+const bigDivToFixed = (numer, denom, decimals) => {
+    if (denom === 0n) return '0';
+    const neg = (numer < 0n) !== (denom < 0n);
+    if (numer < 0n) numer = -numer;
+    if (denom < 0n) denom = -denom;
+    const intPart = numer / denom;
+    let rem = numer % denom;
+    let frac = '';
+    for (let i = 0; i < decimals; i++) {
+        rem *= 10n;
+        const digit = rem / denom;
+        frac += digit.toString();
+        rem = rem % denom;
+    }
+    // round last digit
+    // perform basic rounding by checking next digit
+    rem *= 10n;
+    const next = rem / denom;
+    if (next >= 5n) {
+        // round up
+        let carry = 1;
+        let arr = frac.split('').map(d => parseInt(d, 10));
+        for (let i = arr.length - 1; i >= 0 && carry; i--) {
+            const val = arr[i] + carry;
+            arr[i] = val % 10;
+            carry = Math.floor(val / 10);
+        }
+        if (carry) {
+            // increment intPart
+            const newInt = (BigInt(intPart) + 1n).toString();
+            return (neg ? '-' : '') + newInt + '.' + arr.join('');
+        }
+        frac = arr.join('');
+    }
+    return (neg ? '-' : '') + intPart.toString() + (decimals > 0 ? '.' + frac : '');
+};
+
+// hypergeometric probability: for a ticket with `spots` picks, probability of exactly k hits
+// when `drawCount` (20 by default) numbers are drawn from 1..80.
+// Use BigInt combinatorics for exact rational result and convert to a decimal Number
+// to avoid floating-point precision loss for large combinations.
+const hyperProb = (spots, k, draws = 20) => {
+    if (k < 0 || k > spots || k > draws) return 0;
+    // exact numerator/denominator as BigInt
+    const numer = combBig(spots, k) * combBig(80 - spots, draws - k);
+    const denom = combBig(80, draws);
+    // guard
+    if (denom === 0n) return 0;
+    // produce a decimal string with sufficient precision and parse to Number
+    // 12 fractional digits is generally plenty for display and computations here
+    const dec = bigDivToFixed(numer, denom, 12);
+    return parseFloat(dec);
+};
+
+const formatPct = (v) => (v * 100).toFixed(3) + '%';
+
+export default function KenoDisplay({ maxPicks = 10, drawCount = 20 }) {
+    const numbers = range(80);
+    const [players, setPlayers] = useState([
+        { id: 1, name: 'Player 1', bet: 5, picks: [] }
+    ]);
+    const [spotLimit, setSpotLimit] = useState(maxPicks);
+    const [editingMap, setEditingMap] = useState(() => ({ 1: true }));
+    const [activePlayerId, setActivePlayerId] = useState(1);
+    const [drawn, setDrawn] = useState([]);
+    const [showResults, setShowResults] = useState(false);
+    const drawTimer = useRef(null);
+    const [recentDraw, setRecentDraw] = useState(null);
+    const [results, setResults] = useState([]);
+    const [activeSwitch, setActiveSwitch] = useState(false);
+    const [tailBoost, setTailBoost] = useState(0.5); // 0 = no change, >0 shifts payout weight to higher hits
+    // default payout table (kept as a constant fallback)
+    const defaultPayoutTable = {
+        // simplified multipliers (bet * multiplier)
+        // keys are number of spots (picks)
+        1: { 1: 2 },
+        2: { 2: 12, 1: 1 },
+        3: { 3: 48, 2: 3, 1: 0 },
+        4: { 4: 240, 3: 12, 2: 1, 1: 0 },
+        5: { 5: 1200, 4: 50, 3: 6, 2: 1 },
+        6: { 6: 3000, 5: 300, 4: 25, 3: 3, 2: 1 },
+        7: { 7: 5000, 6: 1500, 5: 120, 4: 10, 3: 2 },
+        8: { 8: 10000, 7: 3000, 6: 500, 5: 50, 4: 6, 3: 1 },
+        9: { 9: 20000, 8: 5000, 7: 1000, 6: 200, 5: 30, 4: 4 },
+        10: { 10: 50000, 9: 10000, 8: 2000, 7: 400, 6: 60, 5: 8 }
+    };
+
+    // return expected multiplier for a given spots using current payoutTable and tailBoost
+    const expectedMultiplierWithTail = (spots, boost = tailBoost) => {
+        const base = payoutTable[spots] || {};
+        const table = applyTailBoostToTable(spots, boost, 3, base);
+        const probs = [];
+        for (let k = 0; k <= spots; k++) probs.push(hyperProb(spots, k));
+        return probs.reduce((acc, p, k) => acc + p * (table[k] || 0), 0);
+    };
+
+    // apply computed scaled payouts (preserving tail shape) to a single spot size and save
+    const applyHouseEdgeToSpot = (spots, houseEdgePercent = 30) => {
+        const newTable = computeScaledPayoutsWithTail(spots, houseEdgePercent, tailBoost, 3);
+        if (newTable) {
+            setPayoutTable(prev => ({ ...prev, [spots]: newTable }));
+        }
+    };
+
+    // apply to all spot sizes 1..max
+    const applyHouseEdgeToAll = (houseEdgePercent = 30) => {
+        const next = { ...payoutTable };
+        for (let s = 1; s <= maxPicks; s++) {
+            const nt = computeScaledPayoutsWithTail(s, houseEdgePercent, tailBoost, 3);
+            if (nt) next[s] = nt;
+        }
+        setPayoutTable(next);
+    };
+
+    // Monte Carlo sampling helper: sample k according to hyperProb distribution
+    const sampleK = (spots) => {
+        const probs = [];
+        for (let k = 0; k <= spots; k++) probs.push(hyperProb(spots, k));
+        const r = Math.random();
+        let accum = 0;
+        for (let k = 0; k < probs.length; k++) {
+            accum += probs[k];
+            if (r <= accum) return k;
+        }
+        return probs.length - 1;
+    };
+
+    // Run Monte Carlo simulation: returns detailed stats for player and house
+    // Considers: spot size, current payout table, tailBoost, bet, rounds, iterations.
+    const runMonteCarlo = (spots, rounds, start, bet, iters = 5000) => {
+        const tableBase = payoutTable[spots] || {};
+        const table = applyTailBoostToTable(spots, tailBoost, 3, tableBase);
+        const finals = new Array(iters);
+        const houseProfits = new Array(iters);
+
+        for (let i = 0; i < iters; i++) {
+            let playerBk = start;
+            let houseProfit = 0; // house collects bet, pays out bet*m -> per round house += bet - bet*m
+            for (let r = 0; r < rounds; r++) {
+                const k = sampleK(spots);
+                const m = table[k] || 0;
+                const payout = bet * m;
+                // update player and house
+                playerBk = playerBk - bet + payout;
+                houseProfit += (bet - payout);
+            }
+            finals[i] = playerBk;
+            houseProfits[i] = houseProfit;
+        }
+
+        // helper stats
+        const stats = (arr) => {
+            const n = arr.length;
+            if (n === 0) return null;
+            const sorted = arr.slice().sort((a, b) => a - b);
+            const sum = arr.reduce((s, v) => s + v, 0);
+            const mean = sum / n;
+            const sq = arr.reduce((s, v) => s + (v - mean) * (v - mean), 0) / n;
+            const sd = Math.sqrt(sq);
+            const median = (n % 2 === 1) ? sorted[(n - 1) / 2] : 0.5 * (sorted[n / 2 - 1] + sorted[n / 2]);
+            const p10 = sorted[Math.max(0, Math.floor(n * 0.1) - 1)];
+            const p25 = sorted[Math.max(0, Math.floor(n * 0.25) - 1)];
+            const p75 = sorted[Math.min(n - 1, Math.floor(n * 0.75) - 1)];
+            const p90 = sorted[Math.min(n - 1, Math.floor(n * 0.9) - 1)];
+            return { mean, sd, median, p10, p25, p75, p90, min: sorted[0], max: sorted[n - 1] };
+        };
+
+        const playerStats = stats(finals);
+        const houseStats = stats(houseProfits);
+        // fraction of iterations where house made money
+        const houseWinFraction = houseProfits.filter(x => x > 0).length / iters;
+
+        return {
+            iters,
+            rounds,
+            bet,
+            start,
+            spot: spots,
+            player: { samples: finals, stats: playerStats },
+            house: { samples: houseProfits, stats: houseStats, winFrac: houseWinFraction }
+        };
+    };
+
+    // Run Monte Carlo using a provided payout table (table is the final multipliers for k)
+    const runMonteCarloWithTable = (spots, rounds, start, bet, iters = 5000, table) => {
+        const finals = new Array(iters);
+        const houseProfits = new Array(iters);
+
+        for (let i = 0; i < iters; i++) {
+            let playerBk = start;
+            let houseProfit = 0;
+            for (let r = 0; r < rounds; r++) {
+                const k = sampleK(spots);
+                const m = table[k] || 0;
+                const payout = bet * m;
+                playerBk = playerBk - bet + payout;
+                houseProfit += (bet - payout);
+            }
+            finals[i] = playerBk;
+            houseProfits[i] = houseProfit;
+        }
+
+        const stats = (arr) => {
+            const n = arr.length;
+            const sorted = arr.slice().sort((a, b) => a - b);
+            const sum = arr.reduce((s, v) => s + v, 0);
+            const mean = sum / n;
+            const sq = arr.reduce((s, v) => s + (v - mean) * (v - mean), 0) / n;
+            const sd = Math.sqrt(sq);
+            const median = (n % 2 === 1) ? sorted[(n - 1) / 2] : 0.5 * (sorted[n / 2 - 1] + sorted[n / 2]);
+            const p10 = sorted[Math.max(0, Math.floor(n * 0.1) - 1)];
+            const p90 = sorted[Math.min(n - 1, Math.floor(n * 0.9) - 1)];
+            return { mean, sd, median, p10, p90, min: sorted[0], max: sorted[n - 1] };
+        };
+
+        const playerStats = stats(finals);
+        const houseStats = stats(houseProfits);
+        const houseWinFraction = houseProfits.filter(x => x > 0).length / iters;
+        return { iters, rounds, bet, start, spot: spots, player: { stats: playerStats }, house: { stats: houseStats, winFrac: houseWinFraction } };
+    };
+
+    // Compute scaled payouts preserving a tail-boost shape.
+    // houseEdgePercent: e.g. 30 for 30%
+    // tailBoost: same scale used by `applyTailBoostToTable` (0 = no change)
+    const computeScaledPayoutsWithTail = (spots, houseEdgePercent = 30, tailBoostVal = 0.5, power = 3) => {
+        const targetNum = BigInt(100 - Math.round(houseEdgePercent));
+        const targetDen = 100n;
+
+        const orig = payoutTable[spots] || {};
+        const maxK = spots;
+        const denom = combBig(80, 20);
+
+        // build integer weights wk = round(orig[k]*100 * factor)
+        let numeratorSum = 0n;
+        const w = [];
+        for (let k = 0; k <= maxK; k++) {
+            const baseVal = orig && Object.prototype.hasOwnProperty.call(orig, k) ? orig[k] : (k >= 1 ? 1 : 0);
+            const frac = (spots > 0) ? (k / spots) : 0;
+            const factor = 1 + tailBoostVal * Math.pow(frac, power);
+            // scale by 100 to keep two decimals
+            const wk = BigInt(Math.round(baseVal * 100 * factor));
+            w.push(wk);
+            if (wk === 0n) continue;
+            const numk = combBig(spots, k) * combBig(80 - spots, 20 - k);
+            numeratorSum += wk * numk;
+        }
+
+        if (numeratorSum === 0n) return null;
+
+        // s = (targetNum/targetDen) * denom / numeratorSum
+        const sNum = targetNum * denom;
+        const sDen = targetDen * numeratorSum;
+
+        const newTable = {};
+        for (let k = 0; k <= maxK; k++) {
+            if (w[k] === 0n) {
+                newTable[k] = 0;
+                continue;
+            }
+            const mkNum = w[k] * sNum;
+            const mkDen = sDen;
+            const dec = bigDivToFixed(mkNum, mkDen, 12);
+            const asNum = parseFloat(dec);
+            // keep higher precision for stored multipliers (6 decimals) to avoid
+            // rounding to zero for low-probability/high-payout entries; UI can
+            // still format to 2 decimals when showing to users.
+            newTable[k] = parseFloat((asNum / 100).toFixed(6));
+        }
+        return newTable;
+    };
+
+    // payoutTable is now stateful and persisted to localStorage so Apply-to-all/spot updates stick
+    const [payoutTable, setPayoutTable] = useState(() => {
+        try {
+            const raw = localStorage.getItem('payoutTable');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                // validate parsed table: compute expected multiplier for spots 1..maxPicks
+                let allNearZero = true;
+                for (let s = 1; s <= maxPicks; s++) {
+                    const tbl = parsed[s] || {};
+                    let exp = 0;
+                    for (let k = 0; k <= s; k++) {
+                        const p = hyperProb(s, k);
+                        exp += p * (tbl[k] || 0);
+                    }
+                    if (exp > 1e-6) { allNearZero = false; break; }
+                }
+                if (!allNearZero) return parsed;
+                // fall through to use defaults if the stored table looks invalid
+            }
+        } catch (e) { /* ignore parse errors */ }
+        return defaultPayoutTable;
+    });
+    useEffect(() => {
+        try { localStorage.setItem('payoutTable', JSON.stringify(payoutTable)); } catch (e) { }
+    }, [payoutTable]);
+    // On first app load (no user payoutTable saved), apply a default house edge
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem('payoutTable');
+            const appliedFlag = localStorage.getItem('houseEdgeApplied');
+            if (!raw && !appliedFlag) {
+                // apply 30% house edge to all spots preserving tail-boost
+                applyHouseEdgeToAll(30);
+                localStorage.setItem('houseEdgeApplied', '1');
+            }
+        } catch (e) { }
+    }, []);
+    const [simResult, setSimResult] = useState(null);
+    const [simRunning, setSimRunning] = useState(false);
+
+    const togglePick = (num) => {
+        if (showResults) return;
+        setPlayers(prev => prev.map(pl => {
+            // toggle only for players currently marked for editing
+            if (!editingMap[pl.id]) return pl;
+            const has = pl.picks.includes(num);
+            if (has) return { ...pl, picks: pl.picks.filter(x => x !== num) };
+            if (pl.picks.length >= spotLimit) return pl;
+            return { ...pl, picks: [...pl.picks, num] };
+        }));
+    };
+
+    const activatePlayer = (id, { clearPicks = false } = {}) => {
+        setPlayers(prev => prev.map(pl => pl.id === id ? { ...pl, picks: clearPicks ? [] : pl.picks } : pl));
+        setActivePlayerId(id);
+        // brief board pulse animation
+        setActiveSwitch(true);
+        setTimeout(() => setActiveSwitch(false), 420);
+    };
+
+    const quickPick = (forPlayerId = activePlayerId) => {
+        if (showResults) return;
+        const q = randomSample(80, Math.min(spotLimit, 80));
+        setPlayers(prev => prev.map(pl => pl.id === forPlayerId ? { ...pl, picks: q } : pl));
+    };
+
+    // payoutTable is now provided by state `payoutTable` (persisted to localStorage)
+
+    // Compute scaled payout multipliers for a spot size to target a house edge.
+    // houseEdgeNum/houseEdgeDen is the desired house edge fraction (e.g., 30% -> 30/100).
+    const computeScaledPayouts = (spots, houseEdgeNum = 30, houseEdgeDen = 100) => {
+        // target expected payout fraction = 1 - houseEdge
+        const targetNum = BigInt(houseEdgeDen - houseEdgeNum); // numerator for target expected
+        const targetDen = BigInt(houseEdgeDen); // denominator for target expected
+
+        // build weights w_k from existing table: use existing values if present, otherwise use 1 for k>=1
+        const table = payoutTable[spots] || {};
+        const maxK = spots;
+
+        // compute exact probability numerators using BigInt
+        const denom = combBig(80, 20);
+        let numeratorSum = 0n;
+        const w = [];
+        for (let k = 0; k <= maxK; k++) {
+            const wk = table[k] ? BigInt(Math.round(table[k] * 100)) : (k >= 1 ? 100n : 0n);
+            // we scaled weights by 100 to keep integer weights for fractional multipliers
+            w.push(wk);
+            if (wk === 0n) continue;
+            const numk = combBig(spots, k) * combBig(80 - spots, 20 - k);
+            numeratorSum += wk * numk;
+        }
+
+        if (numeratorSum === 0n) return null;
+
+        // s = (targetNum/targetDen) * denom / numeratorSum
+        // represent s as fraction sNum/sDen
+        const sNum = targetNum * denom; // BigInt
+        const sDen = targetDen * numeratorSum; // BigInt
+
+        // compute multipliers m_k = w_k * s = (w_k * sNum) / sDen
+        const newTable = {};
+        for (let k = 0; k <= maxK; k++) {
+            if (w[k] === 0n) {
+                newTable[k] = 0;
+                continue;
+            }
+            const mkNum = w[k] * sNum; // BigInt
+            const mkDen = sDen; // BigInt
+            const dec = bigDivToFixed(mkNum, mkDen, 12); // string
+            const asNum = parseFloat(dec);
+            // preserve higher precision (6 decimals) for multipliers
+            newTable[k] = parseFloat((asNum / 100).toFixed(6));
+        }
+        return newTable;
+    };
+
+    const computePayout = (player, drawnSet) => {
+        const hits = player.picks.filter(p => drawnSet.includes(p)).length;
+        const spots = player.picks.length;
+        // derive a (possibly) tail-boosted table to make big wins rarer but larger
+        const tableBase = payoutTable[spots] || {};
+        const table = applyTailBoostToTable(spots, tailBoost, 3, tableBase);
+        // Use explicit table value when present; otherwise treat as 0 (no payout).
+        const multiplier = (table && Object.prototype.hasOwnProperty.call(table, hits)) ? table[hits] : 0;
+        return { hits, multiplier, payout: +(player.bet * multiplier).toFixed(2) };
+    };
+
+    // Create a tail-heavy version of a payout table by redistributing weight toward larger k.
+    // - spots: number of picks
+    // - boost: 0..n, where 0 means no change, larger makes top-end larger
+    // - power: exponent shaping how sharply weight rises with k
+    // - baseTable: optional explicit base multipliers (if omitted, uses `payoutTable`)
+    const applyTailBoostToTable = (spots, boost = 0.5, power = 3, baseTable = null) => {
+        const orig = baseTable || (payoutTable[spots] || {});
+        // probabilities for k=0..spots
+        const probs = [];
+        for (let k = 0; k <= spots; k++) probs.push(hyperProb(spots, k));
+        // original expected multiplier
+        const expectedOrig = probs.reduce((acc, p, k) => acc + p * (orig[k] || 0), 0);
+        if (expectedOrig === 0) return orig; // nothing to scale against
+
+        // build adjusted weights
+        const wprime = [];
+        for (let k = 0; k <= spots; k++) {
+            const base = (orig && Object.prototype.hasOwnProperty.call(orig, k)) ? orig[k] : (k >= 1 ? 1 : 0);
+            const frac = (spots > 0) ? (k / spots) : 0;
+            const factor = 1 + boost * Math.pow(frac, power);
+            wprime[k] = base * factor;
+        }
+
+        // compute scaling s so that expected multiplier stays equal to expectedOrig
+        let denom = 0;
+        for (let k = 0; k <= spots; k++) denom += probs[k] * wprime[k];
+        if (denom === 0) return orig;
+        const s = expectedOrig / denom;
+
+        const out = {};
+        for (let k = 0; k <= spots; k++) {
+            const val = parseFloat((s * wprime[k]).toFixed(6));
+            out[k] = val;
+        }
+        return out;
+    };
+
+    const draw = () => {
+        if (drawTimer.current) return; // already drawing
+        setDrawn([]);
+        setRecentDraw(null);
+        setShowResults(false);
+        setResults([]);
+
+        const order = randomSample(80, Math.min(drawCount, 80));
+        let idx = 0;
+        const progressive = [];
+        drawTimer.current = setInterval(() => {
+            progressive.push(order[idx]);
+            setDrawn([...progressive]);
+            setRecentDraw(order[idx]);
+            idx += 1;
+            if (idx >= order.length) {
+                clearInterval(drawTimer.current);
+                drawTimer.current = null;
+                setShowResults(true);
+                // compute results
+                const final = players.map(pl => ({
+                    id: pl.id,
+                    name: pl.name,
+                    bet: pl.bet,
+                    picks: pl.picks,
+                    ...computePayout(pl, order)
+                }));
+                setResults(final);
+            }
+        }, 280);
+    };
+
+    const reset = () => {
+        setPlayers(prev => prev.map(pl => ({ ...pl, picks: [] })));
+        setDrawn([]);
+        setShowResults(false);
+        setResults([]);
+        setRecentDraw(null);
+        if (drawTimer.current) { clearInterval(drawTimer.current); drawTimer.current = null; }
+    };
+
+    const hits = [];
+
+    useEffect(() => {
+        return () => { if (drawTimer.current) clearInterval(drawTimer.current); };
+    }, []);
+
+    return (
+        <div style={{
+            padding: 20,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 16,
+            fontFamily: 'Segoe UI, Roboto, system-ui, sans-serif'
+        }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <h2 style={{ margin: 0 }}>Keno — 1..80</h2>
+                <div style={{
+                    marginLeft: 12,
+                    fontSize: 12,
+                    color: '#666',
+                    background: '#fff',
+                    padding: '6px 10px',
+                    borderRadius: 8,
+                    boxShadow: '0 6px 18px rgba(0,0,0,0.04)'
+                }}>
+                    Players: <strong>{players.length}</strong>
+                </div>
+                {/* Calibrator: find house-edge that produces a target house-win fraction */}
+                <div style={{ marginTop: 12, fontSize: 13 }}>
+                    <div style={{ fontWeight: 800 }}>Calibrator — target house-win fraction</div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                        <label style={{ fontSize: 12 }}>Target house-win %:</label>
+                        <input id="cal-target" type="number" defaultValue={70} min={0} max={100} style={{ width: 80 }} />
+                        <label style={{ fontSize: 12 }}>Tolerance %:</label>
+                        <input id="cal-tol" type="number" defaultValue={2} min={0.1} max={20} step={0.1} style={{ width: 80 }} />
+                        <label style={{ fontSize: 12 }}>MC iters (per test):</label>
+                        <input id="cal-iters" type="number" defaultValue={1200} min={200} max={10000} style={{ width: 100 }} />
+                        <label style={{ fontSize: 12 }}>Max steps:</label>
+                        <input id="cal-steps" type="number" defaultValue={12} min={1} max={30} style={{ width: 80 }} />
+                        <button style={{ ...btnStyle, padding: '6px 8px' }} onClick={async () => {
+                            const spot = Number(document.getElementById('mc-spot').value) || 10;
+                            const rounds = Number(document.getElementById('mc-rounds').value) || 1000;
+                            const start = Number(document.getElementById('mc-start').value) || 100;
+                            const bet = Number(document.getElementById('mc-bet').value) || 1;
+                            const targetPct = Number(document.getElementById('cal-target').value) || 70;
+                            const tolPct = Number(document.getElementById('cal-tol').value) || 2;
+                            const iters = Number(document.getElementById('cal-iters').value) || 1200;
+                            const maxSteps = Number(document.getElementById('cal-steps').value) || 12;
+                            const target = targetPct / 100;
+                            const tol = tolPct / 100;
+                            // binary search over houseEdgePercent
+                            let lo = 0;
+                            let hi = 90;
+                            let best = null;
+                            for (let step = 0; step < maxSteps; step++) {
+                                const mid = (lo + hi) / 2;
+                                // compute candidate scaled table for mid edge
+                                const candTable = computeScaledPayoutsWithTail(spot, mid, tailBoost, 3);
+                                if (!candTable) break;
+                                // run MC with candidate table (synchronous but short)
+                                const res = runMonteCarloWithTable(spot, rounds, start, bet, iters, candTable);
+                                const frac = res.house.winFrac;
+                                // store best
+                                best = { edge: mid, frac, res, table: candTable };
+                                // decide direction
+                                if (Math.abs(frac - target) <= tol) break;
+                                if (frac > target) {
+                                    // house wins too often -> reduce house edge
+                                    hi = mid;
+                                } else {
+                                    // house wins too rarely -> increase house edge
+                                    lo = mid;
+                                }
+                                // allow UI to breathe a little
+                                await new Promise(r => setTimeout(r, 20));
+                            }
+                            if (best) {
+                                // show results and offer to apply
+                                const pct = (best.frac * 100).toFixed(2);
+                                if (confirm(`Calibration complete. Found edge ≈ ${best.edge.toFixed(2)}% → house-win ${pct}%. Apply this payout table to ${spot}-spot? (OK=Apply, Cancel=Preview only)`)) {
+                                    setPayoutTable(prev => ({ ...prev, [spot]: best.table }));
+                                    alert(`Applied edge ${best.edge.toFixed(2)}% to ${spot}-spot.`);
+                                } else {
+                                    // store preview in simResult for inspection
+                                    setSimResult({ player: best.res.player, house: best.res.house, previewEdge: best.edge, previewSpot: spot });
+                                    alert(`Preview ready: edge ${best.edge.toFixed(2)}% → house-win ${pct}% (not applied).`);
+                                }
+                            } else {
+                                alert('Calibration failed to find a candidate table.');
+                            }
+                        }}>Run Calibrator</button>
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>Calibrator runs a small Monte Carlo repeatedly to find a house-edge that produces approximately your target house-win fraction for the chosen parameters. Use higher MC iters for more accurate calibration.</div>
+                </div>
+            </div>
+            <div style={{ marginTop: 12, background: '#fff', padding: 10, borderRadius: 8, boxShadow: '0 8px 20px rgba(0,0,0,0.04)' }}>
+                <div style={{ fontWeight: 800 }}>Monte Carlo simulator</div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                    <label style={{ fontSize: 12 }}>Spot:</label>
+                    <select id="mc-spot" defaultValue={Math.min(10, spotLimit)}>
+                        {Array.from({ length: 10 }, (_, i) => i + 1).map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <label style={{ fontSize: 12 }}>Start $:</label>
+                    <input id="mc-start" type="number" defaultValue={100} style={{ width: 100 }} />
+                    <label style={{ fontSize: 12 }}>Bet/round $:</label>
+                    <input id="mc-bet" type="number" defaultValue={1} style={{ width: 80 }} />
+                    <label style={{ fontSize: 12 }}>Rounds:</label>
+                    <input id="mc-rounds" type="number" defaultValue={1000} style={{ width: 100 }} />
+                    <label style={{ fontSize: 12 }}>Iters:</label>
+                    <input id="mc-iters" type="number" defaultValue={2000} style={{ width: 100 }} />
+                    <button style={{ ...btnStyle, padding: '6px 8px' }} onClick={() => {
+                        const spot = Number(document.getElementById('mc-spot').value) || 10;
+                        const start = Number(document.getElementById('mc-start').value) || 100;
+                        const bet = Number(document.getElementById('mc-bet').value) || 1;
+                        const rounds = Number(document.getElementById('mc-rounds').value) || 1000;
+                        const iters = Number(document.getElementById('mc-iters').value) || 2000;
+                        // check expected multiplier for this spot (with current tail boost)
+                        const expected = expectedMultiplierWithTail(spot, tailBoost);
+                        const houseEdgeInput = Number(document.getElementById('house-edge')?.value) || 30;
+                        if (expected >= 1) {
+                            // player-favorable: automatically apply configured house edge to this spot
+                            const newT = computeScaledPayoutsWithTail(spot, houseEdgeInput, tailBoost, 3);
+                            if (newT) {
+                                setPayoutTable(prev => ({ ...prev, [spot]: newT }));
+                                // small delay to ensure state updates before running
+                                setSimRunning(true);
+                                setTimeout(() => {
+                                    const res = runMonteCarlo(spot, rounds, start, bet, iters);
+                                    setSimResult(res);
+                                    setSimRunning(false);
+                                }, 50);
+                                return;
+                            }
+                        }
+                        // otherwise run with current table
+                        setSimRunning(true);
+                        setTimeout(() => {
+                            const res = runMonteCarlo(spot, rounds, start, bet, iters);
+                            setSimResult(res);
+                            setSimRunning(false);
+                        }, 50);
+                    }}>{simRunning ? 'Running...' : 'Run Monte Carlo'}</button>
+                    {simResult && (
+                        <div style={{ marginLeft: 12, fontSize: 13, display: 'flex', gap: 12 }}>
+                            <div>
+                                Player final (mean): <strong>${simResult.player.stats.mean.toFixed(2)}</strong>
+                                <div style={{ fontSize: 12 }}>median {simResult.player.stats.median.toFixed(2)}, p10 {simResult.player.stats.p10.toFixed(2)}, p90 {simResult.player.stats.p90.toFixed(2)}</div>
+                            </div>
+                            <div>
+                                House profit (mean): <strong>${simResult.house.stats.mean.toFixed(2)}</strong>
+                                <div style={{ fontSize: 12 }}>median {simResult.house.stats.median.toFixed(2)}, p10 {simResult.house.stats.p10.toFixed(2)}, p90 {simResult.house.stats.p90.toFixed(2)}</div>
+                            </div>
+                            <div>
+                                House wins fraction: <strong>{(simResult.house.winFrac * 100).toFixed(2)}%</strong>
+                                <div style={{ fontSize: 12 }}>iters: {simResult.iters}</div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+                <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>This sim samples hit counts using exact probabilities and applies the current tail-boosted payout table.</div>
+            </div>
+
+            {/* spot/difficulty selector and probability table for selected spot size */}
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', marginTop: 12 }}>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>Spots:</div>
+                    {Array.from({ length: 10 }, (_, i) => i + 1).map(s => (
+                        <button key={s} onClick={() => {
+                            setSpotLimit(s);
+                            // trim players picks if they exceed new limit
+                            setPlayers(prev => prev.map(pl => ({ ...pl, picks: pl.picks.slice(0, s) })));
+                        }} style={{ ...btnStyle, padding: '6px 8px', background: spotLimit === s ? '#455a64' : '#03a9f4' }}>{s}</button>
+                    ))}
+                </div>
+
+                <div style={{ marginLeft: 12, background: '#fff', padding: 10, borderRadius: 8, boxShadow: '0 8px 20px rgba(0,0,0,0.04)' }}>
+                    <div style={{ fontWeight: 800, marginBottom: 6 }}>Exact probabilities ({spotLimit}-spot)</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                        {Array.from({ length: spotLimit + 1 }, (_, k) => k).map(k => {
+                            const p = hyperProb(spotLimit, k);
+                            return (
+                                <div key={k} style={{ fontSize: 12, padding: 6, background: '#fafafa', borderRadius: 6, border: '1px solid #eee' }}>
+                                    <div style={{ fontWeight: 700 }}>{k} hits</div>
+                                    <div style={{ fontFamily: 'monospace' }}>{p.toFixed(10)}</div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 12 }}>
+                        Sum: <strong style={{ fontFamily: 'monospace' }}>{Array.from({ length: spotLimit + 1 }, (_, k) => hyperProb(spotLimit, k)).reduce((a, b) => a + b, 0).toFixed(12)}</strong>
+                    </div>
+                </div>
+            </div>
+
+            {/* controls */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button onClick={() => quickPick()} style={btnStyle} disabled={showResults}>Quick Pick (active)</button>
+                    <button onClick={draw} style={{ ...btnStyle, background: '#e91e63', color: '#fff' }}>Draw {drawCount}</button>
+                    <button onClick={reset} style={{ ...btnStyle, background: '#607d8b', color: '#fff' }}>Reset</button>
+                </div>
+
+                <div style={{ marginLeft: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button onClick={() => {
+                        const id = Date.now();
+                        setPlayers(prev => {
+                            const next = [...prev, { id, name: `Player ${prev.length + 1}`, bet: 5, picks: [] }];
+                            return next;
+                        });
+                        // mark new player editable by default
+                        setEditingMap(prev => ({ ...prev, [id]: true }));
+                        // activate for convenience and clear picks
+                        activatePlayer(id, { clearPicks: true });
+                    }} style={{ ...btnStyle, background: '#8bc34a' }}>Add Player</button>
+                    <button onClick={() => setPlayers(p => {
+                        const next = p.length > 1 ? p.slice(0, -1) : p;
+                        // also prune editingMap keys to keep in sync
+                        const removed = p.length > 1 ? p[p.length - 1].id : null;
+                        if (removed) setEditingMap(m => {
+                            const copy = { ...m };
+                            delete copy[removed];
+                            return copy;
+                        });
+                        return next;
+                    })} style={{ ...btnStyle, background: '#f44336' }}>Remove Player</button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 12 }}>
+                        <label style={{ fontSize: 12 }}>Tail boost:</label>
+                        <input type="range" min="0" max="1" step="0.05" value={tailBoost} onChange={e => setTailBoost(Number(e.target.value))} />
+                        <div style={{ width: 56, fontSize: 12, textAlign: 'right' }}>x{(1 + tailBoost).toFixed(2)}</div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 12 }}>
+                        <label style={{ fontSize: 12 }}>House edge %:</label>
+                        <input id="house-edge" type="number" defaultValue={30} min={0} max={99} style={{ width: 80 }} />
+                        <button style={{ ...btnStyle, padding: '6px 8px' }} onClick={() => {
+                            const val = Number(document.getElementById('house-edge').value) || 30;
+                            applyHouseEdgeToSpot(spotLimit, val);
+                            alert(`Applied ${val}% house edge to ${spotLimit}-spot (tail boost preserved).`);
+                        }}>Apply to {spotLimit}-spot</button>
+                        <button style={{ ...btnStyle, padding: '6px 8px', background: '#607d8b' }} onClick={() => {
+                            const val = Number(document.getElementById('house-edge').value) || 30;
+                            applyHouseEdgeToAll(val);
+                            alert(`Applied ${val}% house edge to all spots (tail boost preserved).`);
+                        }}>Apply to all spots</button>
+                    </div>
+                </div>
+            </div>
+
+            {/* grid */}
+            <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(10, 44px)',
+                gap: 8,
+                background: '#f7f9fc',
+                padding: 12,
+                borderRadius: 12,
+                boxShadow: '0 8px 30px rgba(0,0,0,0.04)'
+            }}>
+                {numbers.map(n => {
+                    const isDrawn = drawn.includes(n);
+                    const playersWhoPicked = players.filter(pl => pl.picks.includes(n));
+                    const pickCount = playersWhoPicked.length;
+                    const isHit = pickCount > 0 && isDrawn;
+                    // tile background: prefer hit (green), drawn (orange), otherwise white
+                    const tileColor = isHit ? '#4caf50' : (isDrawn ? '#ff7043' : '#fff');
+                    const textColor = isHit ? '#fff' : '#333';
+                    // compute which players (if any) specifically hit this tile
+                    const playersWhoHit = playersWhoPicked.filter(pl => drawn.includes(n));
+                    // construct stacked ring shadows for players who hit (concentric rings)
+                    let computedBoxShadow = recentDraw === n ? '0 12px 36px rgba(0,0,0,0.12)' : '0 6px 18px rgba(0,0,0,0.04)';
+                    if (playersWhoHit.length > 0) {
+                        const rings = playersWhoHit.map((pl, i) => `0 0 0 ${2 + i * 2}px ${hexToRgba(playerColor(pl.id), 0.85)}`).join(', ');
+                        // add the green hit glow after the colored rings
+                        computedBoxShadow = rings + ', 0 6px 18px rgba(76,175,80,0.18)';
+                    }
+                    return (
+                        <motion.div
+                            key={n}
+                            onClick={() => togglePick(n)}
+                            whileTap={{ scale: 0.96 }}
+                            initial={{ opacity: 0, y: 6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.14 }}
+                            style={{
+                                width: 44,
+                                height: 44,
+                                borderRadius: 8,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                cursor: showResults ? 'default' : 'pointer',
+                                userSelect: 'none',
+                                fontWeight: 700,
+                                color: textColor,
+                                background: tileColor,
+                                boxShadow: computedBoxShadow,
+                                position: 'relative',
+                                transition: 'transform 220ms ease',
+                                transform: activeSwitch ? 'scale(1.04)' : 'scale(1)'
+                            }}
+                        >
+                            {n}
+                            {/* if multiple players picked this number, render small color markers */}
+                            {pickCount > 0 && (
+                                <div style={{ position: 'absolute', bottom: 4, left: 4, right: 4, display: 'flex', gap: 4, justifyContent: 'center' }}>
+                                    {playersWhoPicked.slice(0, 6).map(pl => (
+                                        <div key={pl.id} title={pl.name} style={{ width: 8, height: 8, borderRadius: 8, background: playerColor(pl.id), opacity: 0.95, border: '1px solid rgba(0,0,0,0.06)' }} />
+                                    ))}
+                                </div>
+                            )}
+                        </motion.div>
+                    );
+                })}
+            </div>
+
+            {/* results / info */}
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 8 }}>
+                <div style={infoBoxStyle}>Drawn: <strong>{drawn.length}</strong></div>
+                <div style={infoBoxStyle}>Recent: <strong style={{ color: '#ff7043' }}>{recentDraw || '—'}</strong></div>
+                {showResults && (
+                    <div style={infoBoxStyle}>
+                        Results calculated
+                    </div>
+                )}
+            </div>
+
+            {/* players panel */}
+            <div style={{ display: 'flex', gap: 12, marginTop: 12, width: '100%', justifyContent: 'center', flexWrap: 'wrap' }}>
+                {players.map((pl, idx) => {
+                    const res = results.find(r => r.id === pl.id);
+                    // precompute probabilities & expected return for this player's spots
+                    const spots = pl.picks.length;
+                    const probs = [];
+                    for (let k = 0; k <= spots; k++) probs.push(hyperProb(spots, k));
+                    // expected multiplier according to the (possibly) tail-boosted payout table
+                    const tableBase = payoutTable[spots] || {};
+                    const table = applyTailBoostToTable(spots, tailBoost, 3, tableBase);
+                    const expectedMultiplier = probs.reduce((acc, p, k) => {
+                        const m = table[k] || 0;
+                        return acc + p * m;
+                    }, 0);
+                    const expectedReturnPct = (expectedMultiplier * 100).toFixed(2);
+                    return (
+                        <div key={pl.id} style={{ minWidth: 220, background: '#fff', padding: 8, borderRadius: 10, boxShadow: '0 8px 20px rgba(0,0,0,0.04)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                <div style={{ width: 12, height: 12, borderRadius: 12, background: playerColor(pl.id) }} />
+                                <input value={pl.name} onChange={e => setPlayers(prev => prev.map(p => p.id === pl.id ? { ...p, name: e.target.value } : p))} style={{ flex: 1, border: 0, fontWeight: 700 }} />
+                                <button onClick={() => activatePlayer(pl.id, { clearPicks: false })} style={{ ...btnStyle, padding: '6px 8px', background: activePlayerId === pl.id ? '#455a64' : '#03a9f4' }}>{activePlayerId === pl.id ? 'Active' : 'Make Active'}</button>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12 }}>
+                                    <input type="checkbox" checked={!!editingMap[pl.id]} onChange={e => setEditingMap(m => ({ ...m, [pl.id]: e.target.checked }))} />
+                                    <span style={{ fontSize: 12 }}>Edit</span>
+                                </label>
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                <label style={{ fontSize: 12 }}>Bet:</label>
+                                <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={pl.bet}
+                                    onChange={e => {
+                                        const raw = e.target.value.replace(',', '.').replace(/[^0-9.]/g, '');
+                                        const num = raw === '' ? 0 : Number(raw);
+                                        setPlayers(prev => prev.map(p => p.id === pl.id ? { ...p, bet: num } : p));
+                                    }}
+                                    onBlur={e => {
+                                        let v = e.target.value;
+                                        if (v === '') {
+                                            setPlayers(prev => prev.map(p => p.id === pl.id ? { ...p, bet: 0.1 } : p));
+                                            return;
+                                        }
+                                        v = v.toString().replace(',', '.').replace(/[^0-9.]/g, '');
+                                        const num = Math.max(0.1, parseFloat(v) || 0.1);
+                                        setPlayers(prev => prev.map(p => p.id === pl.id ? { ...p, bet: +num.toFixed(2) } : p));
+                                    }}
+                                    style={{ width: 80 }}
+                                />
+                                <div style={{ marginLeft: 'auto', fontSize: 12, color: '#666' }}>Spots: <strong>{pl.picks.length}</strong> / {spotLimit}</div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                                <button onClick={() => quickPick(pl.id)} style={btnStyle} disabled={showResults}>QuickPick</button>
+                                <button onClick={() => setPlayers(prev => prev.map(p => p.id === pl.id ? { ...p, picks: [] } : p))} style={{ ...btnStyle, background: '#607d8b' }}>Clear Picks</button>
+                                <button onClick={() => setPlayers(prev => prev.map(p => p.id === pl.id ? { ...p, picks: p.picks.slice(0, spotLimit) } : p))} style={{ ...btnStyle, background: '#ffb300' }}>Trim to {spotLimit}</button>
+                                <button onClick={() => { const q = randomSample(80, Math.min(spotLimit, 80)); setPlayers(prev => prev.map(p => p.id === pl.id ? { ...p, picks: q } : p)); }} style={{ ...btnStyle, background: '#8e24aa' }}>QuickPick {spotLimit}</button>
+                            </div>
+                            {activePlayerId === pl.id && (
+                                <div style={{ marginTop: 8, background: '#fff8e1', padding: 8, borderRadius: 8, border: '1px solid #ffecb3' }}>
+                                    <div style={{ fontSize: 13, fontWeight: 700 }}>Probabilities ({spots}-spot)</div>
+                                    <div style={{ fontSize: 12, color: '#444', display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
+                                        <div>Expected return:</div>
+                                        <div style={{ fontWeight: 800 }}>{expectedReturnPct}%</div>
+                                        <div style={{ marginLeft: 'auto', fontSize: 12, color: '#666' }}>Multiplier: x{expectedMultiplier.toFixed(3)}</div>
+                                    </div>
+                                    <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                                        {probs.map((p, k) => {
+                                            const mult = (table && (table[k] || 0));
+                                            return (
+                                                <div key={k} style={{ fontSize: 12, padding: 6, background: '#fff', borderRadius: 6, border: '1px solid #eee' }}>
+                                                    <div style={{ fontWeight: 700 }}>{k} hits</div>
+                                                    <div style={{ color: '#333' }}>x{(+mult).toFixed(2)}</div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                            {showResults && res && (
+                                <div style={{ marginTop: 6, background: '#f1f8e9', padding: 8, borderRadius: 8 }}>
+                                    <div>Hits: <strong style={{ color: '#4caf50' }}>{res.hits}</strong></div>
+                                    <div>Payout: <strong>${res.payout}</strong> (x{res.multiplier})</div>
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+
+            {/* small legend */}
+            <div style={{ marginTop: 12, background: '#fff', padding: 10, borderRadius: 8, boxShadow: '0 8px 20px rgba(0,0,0,0.04)' }}>
+                <div style={{ fontWeight: 800 }}>Per-spot expected return (with tail boost)</div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                    {Array.from({ length: 10 }, (_, i) => i + 1).map(s => {
+                        const em = expectedMultiplierWithTail(s, tailBoost);
+                        const edge = (1 - em) * 100;
+                        return (
+                            <div key={s} style={{ minWidth: 120, background: '#fafafa', padding: 8, borderRadius: 8, border: '1px solid #eee' }}>
+                                <div style={{ fontWeight: 700 }}>{s}-spot</div>
+                                <div style={{ fontSize: 12 }}>Exp mult: <strong>x{em.toFixed(4)}</strong></div>
+                                <div style={{ fontSize: 12 }}>House edge: <strong>{edge.toFixed(2)}%</strong></div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                <div style={legendItem('#fff', '#333')}>Available</div>
+                <div style={legendItem('#ffeb3b', '#222')}>Picked</div>
+                <div style={legendItem('#ff7043', '#fff')}>Drawn</div>
+                <div style={legendItem('#4caf50', '#fff')}>Hit</div>
+            </div>
+        </div>
+    );
+}
+
+// small styles
+const btnStyle = {
+    padding: '10px 14px',
+    borderRadius: 10,
+    border: 'none',
+    background: '#03a9f4',
+    color: '#fff',
+    fontWeight: 700,
+    cursor: 'pointer',
+    boxShadow: '0 8px 20px rgba(3,169,244,0.12)'
+};
+
+const infoBoxStyle = {
+    background: '#fff',
+    padding: '8px 12px',
+    borderRadius: 8,
+    boxShadow: '0 8px 20px rgba(0,0,0,0.04)',
+    fontSize: 13
+};
+
+const legendItem = (bg, color) => ({
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '6px 8px',
+    background: bg,
+    color,
+    borderRadius: 8,
+    border: '1px solid #eee',
+    fontSize: 12,
+    fontWeight: 700,
+    boxShadow: '0 6px 18px rgba(0,0,0,0.03)'
+});
+
+// player color helper
+const _playerPalette = ['#ff7043', '#8bc34a', '#03a9f4', '#ffca28', '#ab47bc', '#4dd0e1', '#ff8a65'];
+const playerColor = (id) => _playerPalette[Math.abs(id) % _playerPalette.length];
+const hexToRgba = (hex, a = 1) => {
+    const h = hex.replace('#', '');
+    const bigint = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+    const r = (bigint >> 16) & 255;
+    const g = (bigint >> 8) & 255;
+    const b = bigint & 255;
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+};
+
+  bingo 
+
+
+  import React, { useState, useRef, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { gsap } from "gsap";
+import b1 from '../assets/balls/B1.m4a'
+import { accentColor, maincolor, secondaryColor, ballB, ballI, ballN, ballG, ballO, resolveCssVar } from "../constants/color";
+import { largeFontSize } from "../constants/fontsizes";
+import generateAllCards from "./cartels"; // new import
+
+const bingoBalls = [
+    'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'B15',
+    'I16', 'I17', 'I18', 'I19', 'I20', 'I21', 'I22', 'I23', 'I24', 'I25', 'I26', 'I27', 'I28', 'I29', 'I30',
+    'N31', 'N32', 'N33', 'N34', 'N35', 'N36', 'N37', 'N38', 'N39', 'N40', 'N41', 'N42', 'N43', 'N44', 'N45',
+    'G46', 'G47', 'G48', 'G49', 'G50', 'G51', 'G52', 'G53', 'G54', 'G55', 'G56', 'G57', 'G58', 'G59', 'G60',
+    'O61', 'O62', 'O63', 'O64', 'O65', 'O66', 'O67', 'O68', 'O69', 'O70', 'O71', 'O72', 'O73', 'O74', 'O75'
+];
+// use shared color constants (fall back to CSS variables if any are missing)
+// Resolve CSS variables to concrete color strings at runtime (falls back to var(...) if not available)
+const ballColors = {
+    B: resolveCssVar(ballB) || 'var(--ball-B)',
+    I: resolveCssVar(ballI) || 'var(--ball-I)',
+    N: resolveCssVar(ballN) || 'var(--ball-N)',
+    G: resolveCssVar(ballG) || 'var(--ball-G)',
+    O: resolveCssVar(ballO) || 'var(--ball-O)'
+};
+
+const player = Array.from({ length: 150 }, (_, i) => String(i + 1));
+console.log(player)
+
+const Balldisplay = (props) => {
+    const [gameStarted, setGameStarted] = useState(false);
+    const [pickedBall, setPickedBall] = useState(null);
+    const [remainingBalls, setRemainingBalls] = useState([...bingoBalls]);
+    const [amount, setAmount] = useState(0)
+    const intervalRef = useRef(null);
+
+    // Track picked balls for display
+    const [pickedBallsList, setPickedBallsList] = useState([]);
+    // NEW: UI flag for whether automatic picking is active
+    const [isPicking, setIsPicking] = useState(false);
+    // NEW: track whether a run has been initialized (prevents ref error)
+    const [initialized, setInitialized] = useState(false);
+    // NEW: chosen win rule (one | two | bingo)
+    const [winType, setWinType] = useState("one");
+
+    // NEW: all player cards (generated once)
+    const allCardsRef = useRef(generateAllCards(150));
+
+    // NEW: winners modal state
+    const [winners, setWinners] = useState([]); // array of player ids (strings)
+    const [showWinners, setShowWinners] = useState(false);
+
+    // set of called number strings (e.g. "01","15") used to render overlays
+    const [winningPickedSet, setWinningPickedSet] = useState(new Set());
+
+    const speak = (pickedBall) => {
+        if (pickedBall === "B1") {
+            const audio = new Audio(`src/assets/balls/ball_audio/${pickedBall}.m4a`);
+            return audio.play();
+        }
+
+    };
+
+
+    console.log(amount)
+    console.log(gameStarted)
+
+    // NEW: refs to avoid double-pick race conditions
+    const remainingRef = useRef([...bingoBalls]);
+    const isPickingRef = useRef(false);
+    // ref to the big picked ball element for GSAP animation
+    const pickedRef = useRef(null);
+
+    // Replace pickRandomBall to use refs and a simple lock
+    const pickRandomBall = () => {
+        // prevent re-entry
+        if (isPickingRef.current) return;
+        isPickingRef.current = true;
+
+        // use mutable ref as source of truth for remaining balls
+        const remaining = remainingRef.current;
+        if (!remaining || remaining.length === 0) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+            setPickedBall("All balls picked!");
+            speak("All balls picked!");
+            setIsPicking(false); // ensure UI updates
+            isPickingRef.current = false;
+            return;
+        }
+
+        const idx = Math.floor(Math.random() * remaining.length);
+        const [ball] = remaining.splice(idx, 1); // remove from ref list
+        remainingRef.current = remaining;
+
+        // sync React state
+        setRemainingBalls([...remaining]); // update visible remaining
+        setPickedBall(ball);
+        speak(ball);
+        setPickedBallsList(list => [...list, ball]);
+
+        // small timeout to ensure next interval tick can proceed
+        setTimeout(() => {
+            isPickingRef.current = false;
+        }, 50);
+    };
+
+    // startPicking must reset the ref plus state and ensure single interval
+    const startPicking = () => {
+        if (intervalRef.current) return;
+        // reset source of truth and state
+        remainingRef.current = [...bingoBalls];
+        setRemainingBalls([...bingoBalls]);
+        setPickedBallsList([]);
+        setPickedBall(null);
+
+        // mark active and start ticks
+        setIsPicking(true);
+        // pick one immediately, then start interval
+        pickRandomBall();
+        intervalRef.current = setInterval(pickRandomBall, 3000);
+    }
+
+    // NEW: start a fresh picking run (reset state + start interval)
+    const initPicking = () => {
+        if (intervalRef.current) return;
+        // reset source of truth and state
+        remainingRef.current = [...bingoBalls];
+        setRemainingBalls([...bingoBalls]);
+        setPickedBallsList([]);
+        setPickedBall(null);
+
+        // mark active and start ticks
+        setIsPicking(true);
+        // pick one immediately, then start interval
+        pickRandomBall();
+        intervalRef.current = setInterval(pickRandomBall, 3000);
+        setInitialized(true);
+    };
+
+    // NEW: resume picking without resetting previous picks
+    const resumePicking = () => {
+        if (intervalRef.current) return;
+        // if no remaining balls, do nothing
+        if (!remainingRef.current || remainingRef.current.length === 0) {
+            setIsPicking(false);
+            return;
+        }
+        setIsPicking(true);
+        // pick one immediately and then continue on interval
+        pickRandomBall();
+        intervalRef.current = setInterval(pickRandomBall, 3000);
+    };
+
+    const stopPicking = () => {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+        setIsPicking(false);
+    };
+
+
+
+    const [selectedPlayers, setSelectedPlayers] = useState([]);
+    console.log(selectedPlayers)
+
+    const handlePlayerClick = (num) => {
+        setSelectedPlayers(prev =>
+            prev.includes(num) ? prev : [...prev, num]
+        );
+    };
+    console.log(selectedPlayers.length * amount)
+    console.log(selectedPlayers)
+    // Modal state
+    const [showModal, setShowModal] = useState(false);
+    const [modalInput, setModalInput] = useState("");
+
+    // Add card from modal
+    const handleAddCard = () => {
+        const num = modalInput.trim();
+        if (
+            num &&
+            /^\d+$/.test(num) &&
+            Number(num) >= 1 &&
+            Number(num) <= 150 &&
+            !selectedPlayers.includes(num)
+        ) {
+            setSelectedPlayers(prev => [...prev, num]);
+        }
+        setModalInput("");
+        setShowModal(false);
+    };
+
+    // Helper to group balls by letter
+    const groupBalls = (balls) => {
+        const groups = { B: [], I: [], N: [], G: [], O: [] };
+        balls.forEach(ball => {
+            const letter = ball[0];
+            if (groups[letter]) groups[letter].push(ball);
+        });
+        return groups;
+    };
+    console.log(bingoBalls.filter((_, i) => i !== remainingBalls))
+
+
+    // Helper: evaluate whether card meets winType given picked numbers set
+    const hasWinningLine = (card, pickedNumSet, rule = "one") => {
+        // helper to check single line (row/col/diag)
+        const checkLines = () => {
+            const lines = [];
+            // rows
+            for (let r = 0; r < 5; r++) {
+                let ok = true;
+                for (let c = 0; c < 5; c++) {
+                    const val = card[r][c];
+                    if (val === "FREE") continue;
+                    if (!pickedNumSet.has(val)) { ok = false; break; }
+                }
+                if (ok) lines.push({ type: "row", idx: r });
+            }
+            // cols
+            for (let c = 0; c < 5; c++) {
+                let ok = true;
+                for (let r = 0; r < 5; r++) {
+                    const val = card[r][c];
+                    if (val === "FREE") continue;
+                    if (!pickedNumSet.has(val)) { ok = false; break; }
+                }
+                if (ok) lines.push({ type: "col", idx: c });
+            }
+            // diag TL-BR
+            {
+                let ok = true;
+                for (let i = 0; i < 5; i++) {
+                    const val = card[i][i];
+                    if (val === "FREE") continue;
+                    if (!pickedNumSet.has(val)) { ok = false; break; }
+                }
+                if (ok) lines.push({ type: "diag", idx: 0 });
+            }
+            // diag TR-BL
+            {
+                let ok = true;
+                for (let i = 0; i < 5; i++) {
+                    const val = card[i][4 - i];
+                    if (val === "FREE") continue;
+                    if (!pickedNumSet.has(val)) { ok = false; break; }
+                }
+                if (ok) lines.push({ type: "diag", idx: 1 });
+            }
+            return lines;
+        };
+
+        if (rule === "bingo") {
+            // full house: every non-FREE cell must be in pickedNumSet
+            for (let r = 0; r < 5; r++) {
+                for (let c = 0; c < 5; c++) {
+                    const val = card[r][c];
+                    if (val === "FREE") continue;
+                    if (!pickedNumSet.has(val)) return false;
+                }
+            }
+            return true;
+        }
+
+        const lines = checkLines();
+        if (rule === "one") {
+            return lines.length > 0;
+        }
+        if (rule === "two") {
+            return lines.length >= 2;
+        }
+        if (rule === "three") {
+            return lines.length >= 3;
+        }
+        if (rule === "four") {
+            return lines.length >= 4;
+        }
+        // fallback to single-line
+        return lines.length > 0;
+    };
+
+    // NEW: compute winners from pickedBallsList according to selected winType
+    const computeWinners = () => {
+        // build set of picked numeric strings padded to 2 digits, e.g. '01','15','30'
+        const pickedNums = new Set(pickedBallsList.map(b => {
+            const n = b.slice(1); // remove letter
+            return String(Number(n)).padStart(2, "0");
+        }));
+        const cards = allCardsRef.current;
+        const result = [];
+        for (const [playerId, card] of Object.entries(cards)) {
+            if (hasWinningLine(card, pickedNums, winType)) result.push(playerId);
+        }
+        return { result, pickedNums };
+    };
+
+    // update Stop button to stop and show winners
+    const handleStopAndShowWinners = () => {
+        // pause picking
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+        setIsPicking(false);
+
+        // compute and show winners, also store called numbers for overlay
+        const { result: found, pickedNums } = computeWinners();
+        setWinners(found);
+        setWinningPickedSet(pickedNums);
+        setShowWinners(true);
+    };
+
+    // animate the large picked-ball element when a new ball appears
+    useEffect(() => {
+        if (!pickedBall || !pickedRef.current) return;
+        try {
+            gsap.fromTo(pickedRef.current, { scale: 0.6, rotation: -24, y: -40, autoAlpha: 0 }, { scale: 1, rotation: 0, y: 0, autoAlpha: 1, duration: 0.62, ease: 'bounce.out' });
+        } catch (e) { /* ignore */ }
+    }, [pickedBall]);
+
+    // helper: convert a hex color or CSS var("--name") to rgba(r,g,b,a)
+    // default to using the accent token so theme-controlled values are preferred
+    const hexToRgba = (input = 'var(--accent)', alpha = 0.22) => {
+        let hex = input || 'var(--accent)';
+        try {
+            if (typeof hex === 'string' && hex.startsWith('var(')) {
+                const name = hex.slice(4, -1).trim();
+                const computed = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+                if (computed) hex = computed;
+            }
+        } catch (e) { }
+        if (!hex || !hex.startsWith('#')) return `rgba(0,0,0,${alpha})`;
+        const h = hex.replace('#', '');
+        const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+        const bigint = parseInt(full, 16);
+        const r = (bigint >> 16) & 255;
+        const g = (bigint >> 8) & 255;
+        const b = bigint & 255;
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    };
+
+    // --- Add: animated hint-card component (insert near top of component file) ---
+    const CardHint = ({ winType }) => {
+        // small mapping for label + description
+        const info = {
+            one: { title: '1 Line', desc: 'Any single row, column or diagonal.' },
+            two: { title: '2 Lines', desc: 'Any two distinct lines.' },
+            three: { title: '3 Lines', desc: 'Any three distinct lines.' },
+            four: { title: '4 Lines', desc: 'Any four distinct lines.' },
+            bingo: { title: 'Full House', desc: 'All numbers (full card).' }
+        };
+
+        const item = info[winType] || info.one;
+
+        // simple small preview generator: show 5x5 mini-grid and highlight number of lines required
+        const lineCount = winType === 'bingo' ? 5 : (winType === 'four' ? 4 : (winType === 'three' ? 3 : (winType === 'two' ? 2 : 1)));
+
+        const previewCells = Array.from({ length: 25 }).map((_, i) => {
+            // for visuals mark center as FREE
+            const isCenter = i === 12;
+            return { id: i, label: isCenter ? '●' : '' };
+        });
+
+        return (
+            <motion.div
+                initial={{ scale: 0.98, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: 'spring', stiffness: 260, damping: 26 }}
+                whileHover={{ scale: 1.02 }}
+                style={{
+                    width: 220,
+                    padding: 14,
+                    borderRadius: 12,
+                    background: 'var(--surface)',
+                    boxShadow: '0 12px 30px var(--card-shadow)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                    alignItems: 'stretch',
+                    marginTop: 100,
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--secondary)' }}>{item.title}</div>
+                        <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{item.desc}</div>
+                    </div>
+                    <div style={{ width: 40, height: 40, borderRadius: 8, background: hexToRgba(secondaryColor, 0.12), display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {/* small icon */}
+                        <div style={{ width: 22, height: 22, borderRadius: 6, background: 'var(--secondary)' }} />
+                    </div>
+                </div>
+
+                {/* mini card preview */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 3, marginTop: 6 }}>
+                    {previewCells.map((c, idx) => {
+                        // highlight some rows to visually indicate lineCount (simple heuristic)
+                        const row = Math.floor(idx / 5);
+                        const highlight = row < lineCount; // top rows illustrate required lines
+                        return (
+                            <div key={c.id} style={{
+                                width: 26,
+                                height: 18,
+                                borderRadius: 4,
+                                background: highlight ? hexToRgba(accentColor || 'var(--accent)', 0.18) : 'var(--surface)',
+                                border: '1px solid var(--card-border)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: 10,
+                                color: highlight ? 'var(--accent)' : 'var(--muted)',
+                                fontWeight: 700
+                            }}>
+                                {c.label}
+                            </div>
+                        );
+                    })}
+                </div>
+
+                <motion.div
+                    key={winType}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.28 }}
+                    style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}
+                >
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                        Need lines:
+                    </div>
+                    <div style={{ fontWeight: 800, color: 'var(--secondary)' }}>{winType === 'bingo' ? 'ALL' : lineCount}</div>
+                </motion.div>
+            </motion.div>
+        );
+    };
+    // --- End added component ---
+
+    if (gameStarted) {
+        const groupedAll = groupBalls(bingoBalls);
+        const pickedSet = new Set(pickedBallsList);
+
+        // Calculate max balls in a group for grid columns
+        const maxBalls = Math.max(...Object.values(groupedAll).map(arr => arr.length));
+
+        return (
+            <div
+                style={{
+                    overflowY: 'hidden',
+                    minHeight: "100vh",
+                    background: 'var(--bg)',
+                    padding: 30,
+                    borderRadius: 8,
+                    boxShadow: "0 4px 16px var(--card-shadow)",
+                    marginTop: 50,
+
+                }}
+            >
+
+                <div style={{ overflowY: 'hidden', fontSize: 32, fontWeight: 700, color: "var(--text)", marginBottom: 20, textAlign: "center", letterSpacing: 2 }}>
+                    🎱 abissinia-Bingo Ball Draw 🎱
+                </div>
+                <div style={{ display: 'flex', flexWrap: "wrap", alignItems: 'flex-start', gap: 40, justifyContent: "center", }}>
+                    <div style={{ minWidth: 220, alignContent: 'center', alignItems: 'center', display: 'flex', flexDirection: 'column' }}>
+                        <AnimatePresence>
+                            {pickedBall && pickedBall !== "All balls picked!" && (
+                                <motion.div
+                                    ref={pickedRef}
+                                    //key={pickedBall}
+                                    initial={{ scale: 1, opacity: 0 }}
+                                    animate={{ scale: 1, opacity: 1 }}
+                                    exit={{ scale: 1, opacity: 0 }}
+                                    transition={{ duration: 2 }}
+                                    style={{
+                                        margin: "0 auto 20px auto",
+                                        width: 120,
+                                        height: 120,
+                                        borderRadius: "50%",
+                                        background: ballColors[pickedBall[0]] || "var(--surface)",
+                                        boxShadow: "0 8px 32px var(--card-shadow)",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        fontSize: 40,
+                                        alignSelf: "center",
+                                        fontWeight: "bold",
+                                        color: "var(--surface)",
+                                        border: "4px solid var(--surface)",
+
+
+                                    }}
+                                >
+                                    {pickedBall}
+                                </motion.div>
+                            ) || <h1>No ball Remaining</h1>}
+                        </AnimatePresence>
+                        <div style={{ marginBottom: 16 }}>
+                            <button
+                                style={{
+                                    background: isPicking ? 'var(--accent)' : 'var(--hit)',
+                                    color: 'var(--surface)',
+                                    border: 'none',
+                                    borderRadius: 8,
+                                    padding: '8px 18px',
+                                    fontSize: 16,
+                                    marginRight: 8,
+                                    cursor: 'pointer'
+                                }}
+                                onClick={() => {
+                                    // toggle: if currently picking -> pause, else resume (no reset)
+                                    if (isPicking) {
+                                        stopPicking();
+                                    } else {
+                                        // if never initialized (e.g. game started via Play?), fall back to init
+                                        if (!initialized) initPicking();
+                                        else resumePicking();
+                                    }
+                                }}
+                            >
+                                {isPicking ? "Pause" : "Resume"}
+                            </button>
+                            <button
+                                style={{
+                                    background: 'var(--danger)',
+                                    color: 'var(--surface)',
+                                    border: 'none',
+                                    borderRadius: 8,
+                                    padding: '8px 18px',
+                                    fontSize: 16,
+                                    cursor: 'pointer'
+                                }}
+                                onClick={handleStopAndShowWinners}
+                            >Stop</button>
+                        </div>
+                        <div style={{ fontSize: 16, color: "var(--muted)", marginBottom: 10 }}>
+                            Remaining: <span style={{ fontWeight: 700 }}>{remainingBalls.length}</span>
+                        </div>
+                    </div>
+
+
+
+                    {/* All balls grid: 5 columns (BINGO), rows for each ball */}
+                    <div>
+                        <h2 style={{ textAlign: "center", color: "var(--text)", marginBottom: 10, fontSize: 22, letterSpacing: 1 }}>All Balls</h2>
+                        <div
+                            style={{
+                                display: 'grid',
+                                gridTemplateRows: 'repeat(5, 1fr)',
+                                gridTemplateColumns: `repeat(${maxBalls}, auto)`,
+                                gap: 6,
+                                background: 'var(--surface)',
+                                borderRadius: 12,
+                                boxShadow: '0 2px 12px var(--card-shadow)',
+                                padding: 10,
+                                minWidth: 520,
+                                maxWidth: 900,
+                                margin: '0 auto'
+                            }}
+                        >
+                            {/* Header column (B I N G O) as first cell in each row */}
+                            {['B', 'I', 'N', 'G', 'O'].map((letter, rowIdx) => {
+                                // For each row, render all balls for that letter horizontally
+                                const balls = groupedAll[letter];
+                                return (
+                                    <React.Fragment key={letter}>
+                                        {/* Render the row: first cell is the letter, then balls */}
+                                        <div
+                                            style={{
+                                                gridRow: rowIdx + 1,
+                                                gridColumn: 1,
+                                                fontWeight: 'bold',
+                                                fontSize: 32,
+                                                color: ballColors[letter],
+                                                textAlign: "center",
+                                                alignSelf: "center",
+
+
+
+                                            }}
+                                        >
+                                            {letter}
+                                        </div>
+                                        {Array.from({ length: maxBalls }).map((_, colIdx) => {
+                                            const ball = balls[colIdx];
+                                            return (
+                                                <AnimatePresence key={letter + colIdx}>
+                                                    <div
+                                                        style={{
+                                                            marginRight: 5,
+                                                            gridRow: rowIdx + 1,
+                                                            gridColumn: colIdx + 2,
+                                                            display: "flex",
+                                                            justifyContent: "center"
+                                                        }}
+                                                    >
+                                                        {ball ? (
+                                                            <motion.div
+                                                                key={ball}
+                                                                initial={pickedSet.has(ball) ? { scale: 0.7, opacity: 0.5 } : false}
+                                                                animate={pickedSet.has(ball) ? { scale: 1.15, opacity: 1 } : { scale: 1, opacity: 1 }}
+                                                                transition={{ type: "spring", stiffness: 400, damping: 18 }}
+                                                                style={{
+                                                                    fontSize: 16,
+                                                                    color: pickedSet.has(ball) ? "var(--surface)" : ballColors[letter],
+                                                                    fontWeight: pickedSet.has(ball) ? "bold" : 500,
+                                                                    background: pickedSet.has(ball) ? ballColors[letter] : 'var(--muted-surface)',
+                                                                    borderRadius: 8,
+                                                                    boxShadow: pickedSet.has(ball) ? "0 2px 8px var(--card-shadow)" : undefined,
+                                                                    transition: "background 0.2s, color 0.2s",
+                                                                    padding: "4px 0",
+                                                                    textAlign: "center",
+                                                                    minWidth: 38,
+                                                                    marginBottom: 5,
+                                                                    margin: "0 2px"
+                                                                }}
+                                                            >
+                                                                {ball}
+                                                            </motion.div>
+                                                        ) : (
+                                                            <div style={{ minWidth: 38 }}></div>
+                                                        )}
+                                                    </div>
+                                                </AnimatePresence>
+                                            );
+                                        })}
+                                    </React.Fragment>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    {/* Winner info */}
+                    <div style={{
+                        background: 'var(--surface)',
+                        borderRadius: 12,
+                        boxShadow: '0 2px 12px var(--card-shadow)',
+                        padding: 24,
+                        minWidth: 180,
+                        textAlign: "center"
+                    }}>
+                        <h1 style={{ color: "var(--text)", fontSize: 22, marginBottom: 10 }}>
+                            Winner Take
+                        </h1>
+                        <motion.div
+                            initial={{ scale: 0.8, opacity: 0.5 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            transition={{ type: "spring", stiffness: 300, damping: 18 }}
+                            style={{ fontSize: '24px', color: 'var(--hit)', fontWeight: 700, marginBottom: 10 }}
+                        >
+                            {Number.parseInt(selectedPlayers.length * amount * 0.90)} Birr
+                        </motion.div>
+                    </div>
+                </div>
+
+                {/* Winners modal */}
+                {showWinners && (
+                    <div style={{
+                        position: "fixed",
+                        inset: 0,
+                        background: "rgba(0,0,0,0.5)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        zIndex: 2000
+                    }}>
+                        <div style={{ background: 'var(--surface)', padding: 20, borderRadius: 12, maxHeight: "80vh", overflow: "auto", width: "90%", maxWidth: 900 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                                <h2>Winners ({winners.length})</h2>
+                                <button onClick={() => setShowWinners(false)} style={{ padding: "6px 12px", cursor: "pointer" }}>Close</button>
+                            </div>
+
+                            {winners.length === 0 && <div>No winners found.</div>}
+
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+                                {[...winners]
+                                    .sort((a, b) => {
+                                        // selected cartels first
+                                        const aSelected = selectedPlayers.includes(a);
+                                        const bSelected = selectedPlayers.includes(b);
+                                        if (aSelected === bSelected) return 0;
+                                        return aSelected ? -1 : 1;
+                                    })
+                                    .map(pid => {
+                                        const card = allCardsRef.current[pid];
+                                        const isCardSelected = selectedPlayers.includes(pid); // pre-selected before game
+                                        return (
+                                            <div
+                                                key={pid}
+                                                style={{
+                                                    border: isCardSelected ? "2px solid var(--secondary)" : "1px solid var(--card-border)",
+                                                    padding: 8,
+                                                    borderRadius: 8,
+                                                    width: 180,
+                                                    background: isCardSelected ? "linear-gradient(135deg, var(--card-highlight) 0%, var(--surface) 100%)" : 'var(--surface)',
+                                                    boxShadow: isCardSelected ? "0 2px 12px var(--card-shadow)" : undefined,
+                                                    transition: "background 0.2s, border 0.2s"
+                                                }}
+                                            >
+                                                <div style={{ fontWeight: 700, marginBottom: 6 }}>{isCardSelected ? "★ " : ""}Player {pid}</div>
+                                                <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4 }}>
+                                                    {["B", "I", "N", "G", "O"].map(h => <div key={h} style={{ textAlign: "center", fontWeight: 700 }}>{h}</div>)}
+                                                    {card.map((row, rIdx) =>
+                                                        row.map((cell, cIdx) => {
+                                                            const isCalled = cell !== 'FREE' && winningPickedSet.has(String(cell));
+                                                            // called numbers take priority; otherwise highlight whole card if pre-selected
+                                                            const bg = isCalled
+                                                                ? 'var(--call-bg)'
+                                                                : (isCardSelected
+                                                                    ? 'var(--card-highlight)'
+                                                                    : (cell === "FREE" ? 'var(--muted-surface)' : 'var(--surface)'));
+                                                            return (
+                                                                <div key={rIdx + "-" + cIdx} style={{
+                                                                    position: 'relative',
+                                                                    textAlign: "center",
+                                                                    padding: "6px 4px",
+                                                                    borderRadius: 4,
+                                                                    border: "1px solid var(--card-border)",
+                                                                    minHeight: 28,
+                                                                    display: 'flex',
+                                                                    alignItems: 'center',
+                                                                    justifyContent: 'center',
+                                                                    fontSize: 12,
+                                                                    fontWeight: cell === "FREE" ? 700 : 600,
+                                                                    background: bg,
+                                                                    color: isCalled ? 'var(--surface)' : 'var(--text)'
+                                                                }}>
+                                                                    {cell}
+                                                                </div>
+                                                            );
+                                                        })
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+            </div>
+        )
+    }
+
+    return (
+        <div
+            style={{
+                minHeight: "100vh",
+                background: 'var(--bg)',
+                padding: 30, marginTop: 50,
+            }}
+        >
+            <h1 style={{ color: 'var(--text)', fontSize: largeFontSize, position: 'relative', left: 0 }}>abissinia-Bingo</h1>
+            {/* Modal for entering card number */}
+            <AnimatePresence>
+                {showModal && (
+                    <motion.div
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.9 }}
+                        transition={{ duration: 0.25 }}
+                        style={{
+                            position: 'fixed',
+                            top: 0, left: 0, right: 0, bottom: 0,
+                            background: 'rgba(0,0,0,0.3)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            zIndex: 1000
+                        }}>
+                        <motion.div
+                            initial={{ y: 60, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            exit={{ y: 60, opacity: 0 }}
+                            transition={{ duration: 0.25 }}
+                            style={{
+                                background: 'var(--surface)',
+                                padding: 30,
+                                borderRadius: 16,
+                                boxShadow: '0 4px 24px var(--card-shadow)',
+                                minWidth: 320
+                            }}>
+                            <h2 style={{ fontSize: 22, color: "var(--text)", marginBottom: 16 }}>Enter Card Number (1-150)</h2>
+                            <input
+                                type="number"
+                                min={1}
+                                max={150}
+                                value={modalInput}
+                                onChange={e => setModalInput(e.target.value.replace(/[^0-9]/g, ''))}
+                                style={{
+                                    width: '100%',
+                                    fontSize: 20,
+                                    marginBottom: 16,
+                                    borderRadius: 8,
+                                    border: "1px solid var(--card-border)",
+                                    padding: "8px 12px"
+                                }}
+                            />
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                                <button
+                                    style={{
+                                        background: 'var(--muted)',
+                                        color: 'var(--surface)',
+                                        border: 'none',
+                                        borderRadius: 8,
+                                        padding: '8px 18px',
+                                        fontSize: 16,
+                                        cursor: 'pointer'
+                                    }}
+                                    onClick={() => setShowModal(false)}
+                                >Cancel</button>
+                                <button
+                                    style={{
+                                        background: 'var(--primary)',
+                                        color: 'var(--surface)',
+                                        border: 'none',
+                                        borderRadius: 8,
+                                        padding: '8px 18px',
+                                        fontSize: 16,
+                                        cursor: 'pointer',
+                                        opacity: (!modalInput ||
+                                            Number(modalInput) < 1 ||
+                                            Number(modalInput) > 150 ||
+                                            selectedPlayers.includes(modalInput)) ? 0.5 : 1
+                                    }}
+                                    onClick={handleAddCard}
+                                    disabled={
+                                        !modalInput ||
+                                        Number(modalInput) < 1 ||
+                                        Number(modalInput) > 150 ||
+                                        selectedPlayers.includes(modalInput)
+                                    }
+                                >
+                                    Add
+                                </button>
+                            </div>
+                            {modalInput && (Number(modalInput) < 1 || Number(modalInput) > 150) && (
+                                <div style={{ color: 'red', marginTop: 8 }}>Number must be between 1 and 150</div>
+                            )}
+                            {modalInput && selectedPlayers.includes(modalInput) && (
+                                <div style={{ color: 'red', marginTop: 8 }}>Card already selected</div>
+                            )}
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+            <div style={{ display: 'flex', flexDirection: 'row', gap: 32 }}>
+                <div>
+                    <h1 style={{ color: "var(--text)", fontSize: 28, marginBottom: 12 }}>List Of Players Card</h1>
+                    <div style={{
+                        width: '60vw',
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 12
+                    }}>
+                        {player.map((i) => (
+                            <motion.div
+                                key={i}
+                                whileTap={{ scale: 1.15, rotate: 8 }}
+                                animate={selectedPlayers.includes(i) ? { scale: 1.08 } : { scale: 1 }}
+                                transition={{ type: "spring", stiffness: 400, damping: 18 }}
+                                onClick={() => {
+                                    setSelectedPlayers(prev =>
+                                        prev.includes(i)
+                                            ? prev.filter(num => num !== i)
+                                            : [...prev, i]
+                                    );
+                                }}
+                                style={{
+                                    height: 70,
+                                    width: 70,
+                                    margin: 4,
+                                    background: selectedPlayers.includes(i)
+                                        ? `linear-gradient(135deg, var(--secondary) 0%, var(--accent) 100%)`
+                                        : 'var(--muted-surface)',
+                                    color: selectedPlayers.includes(i) ? 'var(--surface)' : 'var(--text)',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    borderRadius: 16,
+                                    border: selectedPlayers.includes(i) ? `2px solid var(--secondary)` : '1px solid var(--card-border)',
+                                    fontWeight: 700,
+                                    fontSize: 22,
+                                    boxShadow: selectedPlayers.includes(i)
+                                        ? '0 2px 12px var(--card-shadow)'
+                                        : "0 1px 4px var(--card-shadow)",
+                                    transition: "all 0.2s"
+                                }}
+                            >
+                                {i}
+                            </motion.div>
+                        ))}
+                    </div>
+                </div>
+                <div style={{
+                    minWidth: 220,
+                    background: 'var(--surface)',
+                    borderRadius: 16,
+                    boxShadow: '0 2px 12px var(--card-shadow)',
+                    padding: 24,
+                    height: "fit-content"
+                }}>
+                    <h1 style={{ color: "var(--text)", fontSize: 22, marginBottom: 10 }}>
+                        Betting Amount per Player
+                    </h1>
+                    <input
+                        type="number"
+                        value={amount}
+                        onChange={e => setAmount(e.target.value)}
+                        style={{
+                            fontSize: 20,
+                            borderRadius: 8,
+                            border: "1px solid var(--card-border)",
+                            padding: "8px 12px",
+                            width: "100%",
+                            marginBottom: 18
+                        }}
+                    />
+                    <h1 style={{ color: "var(--text)", fontSize: 22, marginBottom: 10 }}>
+                        Winner Take
+                    </h1>
+                    <motion.div
+                        initial={{ scale: 0.8, opacity: 0.5 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ type: "spring", stiffness: 300, damping: 18 }}
+                        style={{ fontSize: '28px', color: 'var(--hit)', fontWeight: 700, marginBottom: 18 }}
+                    >
+                        {Number.parseInt(selectedPlayers.length * amount * 0.90)} Birr
+                    </motion.div>
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        marginTop: 12,
+                        marginBottom: 8,
+                        maxWidth: 560,
+                        width: '100%',
+                        padding: 10,
+                        borderRadius: 12,
+                        background: 'var(--surface)',
+                        boxShadow: '0 8px 20px var(--card-shadow)'
+                    }}>
+                        <div style={{ fontWeight: 700, color: 'var(--text)', minWidth: 80 }}>Win rule</div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            {[
+                                { key: 'one', label: '1 Line' },
+                                { key: 'two', label: '2 Lines' },
+                                { key: 'three', label: '3 Lines' },
+                                { key: 'four', label: '4 Lines' },
+                                { key: 'bingo', label: 'Full House' }
+                            ].map(opt => (
+                                <button
+                                    key={opt.key}
+                                    onClick={() => setWinType(opt.key)}
+                                    style={{
+                                        padding: '8px 12px',
+                                        borderRadius: 10,
+                                        border: winType === opt.key ? `2px solid var(--secondary)` : '1px solid var(--card-border)',
+                                        background: winType === opt.key ? hexToRgba(secondaryColor, 0.12) : 'var(--muted-surface)',
+                                        color: winType === opt.key ? 'var(--secondary)' : 'var(--text)',
+                                        cursor: 'pointer',
+                                        fontWeight: 700,
+                                        minWidth: 84,
+                                        textAlign: 'center',
+                                        boxShadow: winType === opt.key ? '0 6px 14px var(--card-shadow)' : 'none'
+                                    }}
+                                >
+                                    {opt.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <button
+                        style={{
+                            background: 'var(--primary)',
+                            color: 'var(--surface)',
+                            border: 'none',
+                            borderRadius: 8,
+                            padding: '10px 24px',
+                            fontSize: 18,
+                            marginBottom: 10,
+                            cursor: 'pointer',
+                            width: '100%',
+                            marginTop: 8,
+                            boxShadow: '0 2px 8px var(--card-shadow)'
+                        }}
+                        onClick={() => setShowModal(true)}
+                    >
+                        Enter Card
+                    </button>
+                    <button
+                        style={{
+                            backgroundColor: 'var(--muted)',
+                            color: 'var(--text)',
+                            border: 'none',
+                            borderRadius: 8,
+                            padding: '10px 24px',
+                            fontSize: 18,
+                            width: '100%',
+                            marginTop: 10,
+                            cursor: 'pointer',
+                            boxShadow: '0 2px 8px var(--card-shadow)'
+                        }}
+                        onClick={() => { setGameStarted(true); initPicking(); }}
+                    >
+                        Play
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+
+};
+
+export default Balldisplay;

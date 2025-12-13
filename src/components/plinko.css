@@ -1,0 +1,58 @@
+.plinko-canvas-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.plinko-canvas {
+    background: linear-gradient(180deg, #0f172a, #031020);
+    border-radius: 8px;
+}
+
+.plinko-controls {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px
+}
+
+.plinko-controls .control-row {
+    display: flex;
+    gap: 8px;
+    align-items: center
+}
+
+.plinko-canvas .slot {
+    fill: transparent
+}
+
+/* ball visuals */
+.plinko-ball {
+    transition: transform 80ms linear;
+}
+
+.plinko-ball-shadow {
+    filter: blur(6px);
+    opacity: 0.25
+}
+
+.slots {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px
+}
+
+.slot {
+    width: 28px;
+    height: 18px;
+    background: #065f60;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center
+}
+
+.slot-multiplier {
+    color: #ffd27a;
+    font-size: 12px
+}

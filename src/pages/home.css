@@ -1,0 +1,19 @@
+.spotlight .svg-path {
+    position: absolute;
+    top: 25svh;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    height: 100%;
+    z-index: -1;
+}
+
+.spotlight .svg-path svg {
+    width: 300%;
+    height: auto;
+}
+
+.spotlight .svg-path {
+    top: 15svh;
+    width: 275%;
+}
