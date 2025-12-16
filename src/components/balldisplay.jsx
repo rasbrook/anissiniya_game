@@ -6,6 +6,7 @@ import b1 from '../assets/balls/B1.m4a'
 import { accentColor, maincolor, secondaryColor, ballB, ballI, ballN, ballG, ballO, resolveCssVar } from "../constants/color";
 import { largeFontSize } from "../constants/fontsizes";
 import generateAllCards from "./cartels"; // new import
+import customCartels from "./custumcartel";
 import { useAuthStore } from "../store/authStore";
 import { SupabaseHost } from "../../supabase";
 
@@ -66,8 +67,19 @@ const Balldisplay = (props) => {
     // NEW: chosen win rule (one | two | bingo)
     const [winType, setWinType] = useState("one");
 
-    // NEW: all player cards (generated once)
-    const allCardsRef = useRef(generateAllCards(150));
+    // NEW: all player cards (generated once).
+    // Start from generated cards, then overlay any `customCartels` entries so
+    // custom cards take priority while preserving any missing generated ones.
+    const _initialCards = (() => {
+        const generated = generateAllCards(150);
+        if (customCartels && Object.keys(customCartels).length > 0) {
+            for (const [k, v] of Object.entries(customCartels)) {
+                generated[String(k)] = v;
+            }
+        }
+        return generated;
+    })();
+    const allCardsRef = useRef(_initialCards);
 
     // NEW: winners modal state
     const [winners, setWinners] = useState([]); // array of player ids (strings)
@@ -1059,36 +1071,58 @@ const Balldisplay = (props) => {
                     >
                         Enter Card
                     </button>
-                    <button
-                        style={{
-                            backgroundColor: balance <= 0 ? 'var(--muted)' : 'var(--secondary)',
-                            color: 'var(--text)',
-                            border: 'none',
-                            borderRadius: 8,
-                            padding: '10px 24px',
-                            fontSize: 18,
-                            width: '100%',
-                            marginTop: 10,
-                            cursor: balance <= 0 ? 'not-allowed' : 'pointer',
-                            boxShadow: '0 2px 8px var(--card-shadow)',
-                            opacity: balance <= 0 ? 0.5 : 1
-                        }}
-                        onClick={() => { setGameStarted(true); initPicking(); }}
-                        disabled={balance <= 0}
-                    >
-                        {balance <= 0 ? 'Insufficient Balance' : 'Play'}
-                    </button>
-                    {balance <= 0 && (
-                        <p style={{
-                            color: 'var(--accent)',
-                            fontSize: 14,
-                            textAlign: 'center',
-                            marginTop: 8,
-                            marginBottom: 0
-                        }}>
-                            Please recharge to play
-                        </p>
-                    )}
+                    {(() => {
+                        const required = Number(selectedPlayers.length * amount * 0.10) || 0;
+                        const betAmount = Number(amount) || 0;
+                        const amountTooLow = betAmount <= 10;
+                        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+                        const insufficient = Number(balance) < required || amountTooLow || isOffline;
+                        return (
+                            <>
+                                <button
+                                    style={{
+                                        backgroundColor: insufficient ? 'var(--muted)' : 'var(--secondary)',
+                                        color: 'var(--text)',
+                                        border: 'none',
+                                        borderRadius: 8,
+                                        padding: '10px 24px',
+                                        fontSize: 18,
+                                        width: '100%',
+                                        marginTop: 10,
+                                        cursor: insufficient ? 'not-allowed' : 'pointer',
+                                        boxShadow: '0 2px 8px var(--card-shadow)',
+                                        opacity: insufficient ? 0.5 : 1
+                                    }}
+                                    onClick={() => { setGameStarted(true); initPicking(); }}
+                                    disabled={insufficient}
+                                >
+                                    {insufficient ? (isOffline ? 'No internet connection' : amountTooLow ? 'Minimum bet is 10 birr' : 'Insufficient Balance') : 'Play'}
+                                </button>
+                                {insufficient && amountTooLow && !isOffline && (
+                                    <p style={{
+                                        color: 'var(--accent)',
+                                        fontSize: 14,
+                                        textAlign: 'center',
+                                        marginTop: 8,
+                                        marginBottom: 0
+                                    }}>
+                                        Bet amount must be greater than 10 birr
+                                    </p>
+                                )}
+                                {insufficient && isOffline && (
+                                    <p style={{
+                                        color: 'var(--accent)',
+                                        fontSize: 14,
+                                        textAlign: 'center',
+                                        marginTop: 8,
+                                        marginBottom: 0
+                                    }}>
+                                        Please check your internet connection
+                                    </p>
+                                )}
+                            </>
+                        )
+                    })()}
                 </div>
             </div>
         </div>
