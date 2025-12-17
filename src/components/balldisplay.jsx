@@ -89,10 +89,8 @@ const Balldisplay = (props) => {
     const [winningPickedSet, setWinningPickedSet] = useState(new Set());
 
     const speak = (pickedBall) => {
-        if (pickedBall === "B1") {
-            const audio = new Audio(`src/assets/balls/ball_audio/${pickedBall}.m4a`);
-            return audio.play();
-        }
+        const audio = new Audio(`src/assets/balls/ball_audio/${pickedBall}.mp3`);
+        return audio.play();
 
     };
 
