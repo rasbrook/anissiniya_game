@@ -169,7 +169,7 @@ const Balldisplay = (props) => {
         setIsPicking(true);
         // pick one immediately, then start interval
         pickRandomBall();
-        intervalRef.current = setInterval(pickRandomBall, 4000);
+        intervalRef.current = setInterval(pickRandomBall, 6000);
     }
 
     const deductAmount = async () => {
