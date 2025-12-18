@@ -88,9 +88,9 @@ const Balldisplay = (props) => {
     const [winningPickedSet, setWinningPickedSet] = useState(new Set());
 
     // Import all ball audio files at build time so paths are resolved correctly
-    // and work on case-sensitive hosts. Vite's glob returns URLs when used
-    // with { eager: true, as: 'url' } so the files are included in the build.
-    const _audioModules = import.meta.glob('../assets/balls/ball_audio/*.mp3', { eager: true, as: 'url' });
+    // and work on case-sensitive hosts. Use Vite's new glob options to return
+    // URLs: `query: '?url'` with `import: 'default'` and `eager: true`.
+    const _audioModules = import.meta.glob('../assets/balls/ball_audio/*.mp3', { eager: true, query: '?url', import: 'default' });
     const audioMap = Object.fromEntries(Object.entries(_audioModules).map(([p, url]) => {
         const parts = p.split('/');
         const file = parts[parts.length - 1];
