@@ -556,7 +556,7 @@ const Balldisplay = (props) => {
                 }} style={{ backgroundColor: 'var(--surface)', color: 'var(--accent)', border: 'none', borderRadius: 8, padding: '8px 18px', fontSize: 16, marginRight: 8 }}>Go back</button>
 
                 <div style={{ overflowY: 'hidden', fontSize: 32, fontWeight: 700, color: "var(--text)", marginBottom: 20, textAlign: "center", letterSpacing: 2 }}>
-                    🎱 abissinia-Bingo Ball Draw 🎱
+                    🎱 abyssinia-Bingo Ball Draw 🎱
                 </div>
                 <div style={{ display: 'flex', flexWrap: "wrap", alignItems: 'flex-start', gap: 40, justifyContent: "center", }}>
                     <div style={{ minWidth: 220, alignContent: 'center', alignItems: 'center', display: 'flex', flexDirection: 'column' }}>
@@ -848,7 +848,7 @@ const Balldisplay = (props) => {
             }}
         >
 
-            <h1 style={{ color: 'var(--text)', fontSize: largeFontSize, position: 'relative', left: 0 }}>abissinia-Bingo</h1>
+            <h1 style={{ color: 'var(--text)', fontSize: largeFontSize, position: 'relative', left: 0 }}>abyssinia-Bingo</h1>
             {/* Modal for entering card number */}
             <AnimatePresence>
                 {showModal && (

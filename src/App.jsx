@@ -26,7 +26,7 @@ function App() {
     <BrowserRouter>
       {isAuthenticated && (
         <Header
-          name='abissinia bet'
+          name='abyssinia bet'
           logo={logo}
           CompanyColor={maincolor}
           pages={['Bingo', 'Keno', 'Profile']} />
