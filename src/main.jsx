@@ -20,3 +20,15 @@ createRoot(document.getElementById('root')).render(
     <App />
   </StrictMode>,
 )
+
+// Register service worker for offline audio caching and app shell
+if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').then((reg) => {
+      // registration successful
+      // console.log('Service worker registered:', reg);
+    }).catch((err) => {
+      // console.warn('Service worker registration failed:', err);
+    });
+  });
+}

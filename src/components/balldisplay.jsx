@@ -84,6 +84,9 @@ const Balldisplay = (props) => {
     const [winners, setWinners] = useState([]); // array of player ids (strings)
     const [showWinners, setShowWinners] = useState(false);
 
+    // UI flag: whether audio caching/prefetch completed
+    const [audioCached, setAudioCached] = useState(false);
+
     // set of called number strings (e.g. "01","15") used to render overlays
     const [winningPickedSet, setWinningPickedSet] = useState(new Set());
 
@@ -98,15 +101,86 @@ const Balldisplay = (props) => {
         return [name, url];
     }));
 
+    // Ref to store blob object URLs for cached audio so playback is instant.
+    const audioBlobUrlRef = useRef({});
+
+    // Pre-cache audio files using the Cache Storage API on first mount.
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!('caches' in window)) {
+            // Fallback: do nothing if Cache API not available
+            return;
+        }
+
+        let mounted = true;
+        const cacheName = 'abyssinia-audio-cache-v1';
+        const urls = Object.values(audioMap);
+        // Open cache and ensure all audio URLs are cached. Then create blob URLs for quick playback.
+        (async () => {
+            try {
+                const cache = await caches.open(cacheName);
+                // Add all audio to cache (will skip those already cached)
+                try {
+                    await cache.addAll(urls);
+                } catch (err) {
+                    // addAll may fail if some entries are cross-origin or not available; fall back to individual fetch+put
+                    for (const u of urls) {
+                        try {
+                            const matched = await cache.match(u);
+                            if (!matched) {
+                                const r = await fetch(u, { cache: 'no-cache' });
+                                if (r && r.ok) await cache.put(u, r.clone());
+                            }
+                        } catch (e) {
+                            // ignore individual failures
+                        }
+                    }
+                }
+
+                // Build object URLs for cached responses so `Audio` can play instantly.
+                for (const [key, src] of Object.entries(audioMap)) {
+                    try {
+                        const resp = await cache.match(src);
+                        if (!resp) continue;
+                        const blob = await resp.blob();
+                        if (!mounted) break;
+                        const objUrl = URL.createObjectURL(blob);
+                        audioBlobUrlRef.current[key] = objUrl;
+                    } catch (e) {
+                        // ignore per-file failures
+                    }
+                }
+                // notify UI that audio caching completed
+                if (mounted) setAudioCached(true);
+            } catch (e) {
+                // Cache API may be unavailable or fail; ignore gracefully
+                // console.warn('Audio caching failed', e);
+            }
+        })();
+
+        return () => {
+            mounted = false;
+            // revoke object URLs when unmounting
+            try {
+                const m = audioBlobUrlRef.current || {};
+                for (const k of Object.keys(m)) {
+                    try { URL.revokeObjectURL(m[k]); } catch (_) { }
+                }
+            } catch (e) { }
+        };
+    }, []);
+
     const speak = (pickedBall) => {
         if (!pickedBall) return Promise.resolve();
         const key = String(pickedBall).toUpperCase();
         const src = audioMap[key];
         if (!src) {
-            // No audio for this value (could be control strings like "All balls picked!")
             return Promise.resolve();
         }
-        const audio = new Audio(src);
+        // prefer blob URL from cache if available
+        const blobUrl = audioBlobUrlRef.current[key];
+        const playSrc = blobUrl || src;
+        const audio = new Audio(playSrc);
         return audio.play().catch(err => {
             console.warn('Audio play blocked or failed:', err);
         });
@@ -559,6 +633,16 @@ const Balldisplay = (props) => {
                     🎱 abyssinia-Bingo Ball Draw 🎱
                 </div>
                 <div style={{ display: 'flex', flexWrap: "wrap", alignItems: 'flex-start', gap: 40, justifyContent: "center", }}>
+                    {/* small transient toast when audio caching completes */}
+                    {audioCached && (
+                        <div style={{ position: 'fixed', top: 14, right: 14, zIndex: 3000 }}>
+                            <div style={{ background: 'linear-gradient(90deg, rgba(16,185,129,0.12), rgba(59,130,246,0.08))', color: 'var(--text)', padding: '10px 14px', borderRadius: 10, boxShadow: '0 6px 20px rgba(0,0,0,0.12)', display: 'flex', gap: 10, alignItems: 'center' }}>
+                                <div style={{ width: 10, height: 10, borderRadius: 99, background: 'var(--secondary)' }} />
+                                <div style={{ fontSize: 13, fontWeight: 700 }}>Audio cached for offline playback</div>
+                                <button onClick={() => setAudioCached(false)} style={{ marginLeft: 8, background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer' }}>Dismiss</button>
+                            </div>
+                        </div>
+                    )}
                     <div style={{ minWidth: 220, alignContent: 'center', alignItems: 'center', display: 'flex', flexDirection: 'column' }}>
                         <AnimatePresence>
                             {pickedBall && pickedBall !== "All balls picked!" && (
