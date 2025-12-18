@@ -2,7 +2,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { gsap } from "gsap";
-import b1 from '../assets/balls/B1.m4a'
 import { accentColor, maincolor, secondaryColor, ballB, ballI, ballN, ballG, ballO, resolveCssVar } from "../constants/color";
 import { largeFontSize } from "../constants/fontsizes";
 import generateAllCards from "./cartels"; // new import
@@ -88,10 +87,29 @@ const Balldisplay = (props) => {
     // set of called number strings (e.g. "01","15") used to render overlays
     const [winningPickedSet, setWinningPickedSet] = useState(new Set());
 
-    const speak = (pickedBall) => {
-        const audio = new Audio(`src/assets/balls/ball_audio/${pickedBall}.mp3`);
-        return audio.play();
+    // Import all ball audio files at build time so paths are resolved correctly
+    // and work on case-sensitive hosts. Vite's glob returns URLs when used
+    // with { eager: true, as: 'url' } so the files are included in the build.
+    const _audioModules = import.meta.glob('../assets/balls/ball_audio/*.mp3', { eager: true, as: 'url' });
+    const audioMap = Object.fromEntries(Object.entries(_audioModules).map(([p, url]) => {
+        const parts = p.split('/');
+        const file = parts[parts.length - 1];
+        const name = file.replace(/\.mp3$/i, '').toUpperCase();
+        return [name, url];
+    }));
 
+    const speak = (pickedBall) => {
+        if (!pickedBall) return Promise.resolve();
+        const key = String(pickedBall).toUpperCase();
+        const src = audioMap[key];
+        if (!src) {
+            // No audio for this value (could be control strings like "All balls picked!")
+            return Promise.resolve();
+        }
+        const audio = new Audio(src);
+        return audio.play().catch(err => {
+            console.warn('Audio play blocked or failed:', err);
+        });
     };
 
 
