@@ -595,6 +595,8 @@ const Balldisplay = (props) => {
     if (gameStarted) {
         const groupedAll = groupBalls(bingoBalls);
         const pickedSet = new Set(pickedBallsList);
+        // last three called balls (most recent last)
+        const lastThree = pickedBallsList.slice(-3);
 
         // Calculate max balls in a group for grid columns
         const maxBalls = Math.max(...Object.values(groupedAll).map(arr => arr.length));
@@ -831,6 +833,21 @@ const Balldisplay = (props) => {
                             {Number.parseInt(selectedPlayers.length * amount * 0.90)} Birr
                         </motion.div>
                     </div>
+                </div>
+
+                {/* Last three called balls (bottom-right overlay) */}
+                <div style={{ position: 'fixed', bottom: 20, right: 20, zIndex: 5000, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+                    {[...lastThree].reverse().map((ball, idx) => {
+                        const letter = ball ? ball[0] : 'B';
+                        const bg = ballColors[letter] || 'var(--surface)';
+                        return (
+                            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(0,0,0,0.04)', padding: '6px 10px', borderRadius: 10, boxShadow: '0 6px 18px rgba(0,0,0,0.12)' }}>
+                                <div style={{ width: 44, height: 44, borderRadius: 22, background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--surface)', fontWeight: 800, fontSize: 18 }}>
+                                    {ball}
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
 
                 {/* Winners modal */}
