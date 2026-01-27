@@ -1191,7 +1191,7 @@ const Balldisplay = (props) => {
                     {(() => {
                         const required = Number(selectedPlayers.length * amount * 0.10) || 0;
                         const betAmount = Number(amount) || 0;
-                        const amountTooLow = betAmount <= 10;
+                        const amountTooLow = betAmount <= 19;
                         const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
                         const insufficient = Number(balance) < required || amountTooLow || isOffline;
                         return (
@@ -1213,7 +1213,7 @@ const Balldisplay = (props) => {
                                     onClick={() => { setGameStarted(true); initPicking(); }}
                                     disabled={insufficient}
                                 >
-                                    {insufficient ? (isOffline ? 'No internet connection' : amountTooLow ? 'Minimum bet is 10 birr' : 'Insufficient Balance') : 'Play'}
+                                    {insufficient ? (isOffline ? 'No internet connection' : amountTooLow ? 'Minimum bet is 20 birr' : 'Insufficient Balance') : 'Play'}
                                 </button>
                                 {insufficient && amountTooLow && !isOffline && (
                                     <p style={{
